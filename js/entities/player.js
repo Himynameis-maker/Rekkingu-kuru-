@@ -16,7 +16,8 @@
  *              落下中に上入力があり、体の足元に梯子（中心から LADDER_GRAB_DOTS 以内）があれば、つかまって 'ladder' へ。
  *  - 'ladder': 梯子の上。上下入力で PLAYER_CLIMB_SPEED ドット/tick で昇り降り（x は中心へ寄る）。
  *              昇り降りしていない tick は、どの高さでも左右に動ける。中心から LADDER_GRAB_DOTS ドットを超えて離れたら梯子から外れ、通常落下。
- *              上端（上の足場面の高さ。床には穴があるので足場ではない）では、横へ出て床に1ドット乗れば 'ground'。
+ *              上端（上の足場面の高さ。穴の上なので足場ではない）では、床のある列（足場になる列）へは横に入れない
+ *              （足が床につっかえて上の段に立てない。確定）。床の無い列へは動け、梯子の範囲を出れば落ちる。
  *              下端に着いて足場に乗ったら 'ground' に戻る。
  *  - 'ground' から: 上入力で足元の梯子に乗る（中心から LADDER_GRAB_DOTS 以内）。上の段から梯子へは、穴を歩いて落ち、落下中に上入力でつかまる。
  *
@@ -50,12 +51,14 @@
    * 横に d ドット動かす（1ドットずつ確かめる）。画面の左右はつながっていて、中心x が画面の外へ出たら
    * 反対側へ移す（中心x は常に 0 〜 WIDTH-1。左端を越えたら WIDTH-1、右端を越えたら 0）。
    * stage があれば樽に横からぶつかったところで止める（端をまたぐ樽も同じ）。stage を省くと衝突は見ない。
+   * solidFloor が true（梯子のてっぺんにいるとき）なら、足場のある列（床・樽の上面）へ新しく入る一歩でも止める。
    */
-  function moveX(p, d, stage) {
+  function moveX(p, d, stage, solidFloor) {
     const dir = d > 0 ? 1 : -1;
     for (let i = 0, n = Math.abs(d); i < n; i++) {
       const nx = p.x + dir;                    // 画面の外になることがある（-1 や WIDTH）。衝突判定は外でも反対側の列で行う
       if (stage && RK.Physics.blockedX(stage, nx, p.y, p.w, p.h, dir)) break;
+      if (stage && solidFloor && RK.Physics.blockedByFloorX(stage, nx, p.y, p.w, dir)) break;
       p.x = RK.Physics.wrapX(nx);
     }
   }
@@ -87,8 +90,8 @@
     if (r.landed) p.mode = 'ground';
   }
 
-  /** 左右の入力を処理して横に動かす（チョン + 連続）。足場の上と、梯子の上端で使う */
-  function stepHorizontal(p, input, stage) {
+  /** 左右の入力を処理して横に動かす（チョン + 連続）。足場の上と、梯子の上で使う。solidFloor は梯子のてっぺんのとき true（moveX 参照） */
+  function stepHorizontal(p, input, stage, solidFloor) {
     if (input.dxPressed) {
       p.stepDir = input.dx;
       p.stepTick = 0;
@@ -108,7 +111,7 @@
       p.facing = input.dx;
       move = input.dx * C.PLAYER_SPEED;
     }
-    if (move !== 0) moveX(p, move, stage);
+    if (move !== 0) moveX(p, move, stage, solidFloor);
   }
 
   /** 足場の上での1tick。上入力で足元に梯子があれば、その tick は乗るだけ。なければ左右移動。外れたら落下開始（y の移動は次のtick） */
@@ -136,7 +139,7 @@
       const ny = Math.min(Math.max(p.y + input.dy * C.PLAYER_CLIMB_SPEED, span.top), span.bottom);
       if (ny !== p.y) { p.y = ny; p.x = cx; climbed = true; }
     }
-    if (!climbed) stepHorizontal(p, input, stage);
+    if (!climbed) stepHorizontal(p, input, stage, p.y === span.top);   // てっぺんでは床のある列へ入れない
 
     if ((p.y === span.top || p.y === span.bottom) && RK.Physics.isSupported(stage, p.x, p.y, p.w)) {
       p.mode = 'ground';                                          // 梯子の端で足場に乗った
