@@ -73,7 +73,7 @@ console.log('起動');
 test('index.html の script が全部読めて起動する(RK.booted)', () => ok(RK.booted === true, 'booted でない'));
 test('エラー表示が出ていない', () => eq(els.errors.hidden, true, 'errors.hidden'));
 test('1フレーム回せる(描画で例外が出ない)', () => frames(3));
-test('ステータスに座標が出る', () => ok(/x=24 y=216/.test(els.status.textContent), els.status.textContent));
+test('ステータスに座標が出る', () => ok(els.status.textContent.indexOf('x=' + P().x + ' y=' + P().y) >= 0, els.status.textContent));
 
 console.log('キーボード');
 test('→ 押しっぱなしで右へ進み、離すと止まる', () => {
