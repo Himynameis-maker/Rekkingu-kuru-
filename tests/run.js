@@ -514,6 +514,36 @@ test('blockedByFloorX: 画面の端をまたぐ一歩も反対側の列で判定
   eq(RK.Physics.blockedByFloorX(b, 5, 168, 12, -1), true, '左端 x=6→5: 先頭が col15（床）へ');
   eq(RK.Physics.blockedByFloorX(b, 6, 168, 12, -1), false, '左端 x=7→6: まだ col0（穴）');
 });
+// ハシゴの上に床がある場合（確定）: 床をすり抜けて昇れ、その床に乗れる
+const LADDER_FLOOR_TOP = mkStage({ 6: FULL, 8: FULL }, LADDER_OBJ);
+test('ハシゴの上に床があるときは、下から昇って床をすり抜け、てっぺん(y=168)でその床に乗れる（mode=ground）', () => {
+  const t = setup(LADDER_FLOOR_TOP); t.p.x = 72;
+  t.press('up'); t.tick(1 + 48);
+  eq(t.p.y, 168, 'y'); eq(t.p.mode, 'ground', 'mode');
+  // 上を押し続けても勝手に梯子に戻らず、そのまま左右に歩ける
+  t.tick(5); eq(t.p.mode, 'ground', '上押し続けでも ground');
+  t.release('up'); t.press('right'); t.tick(30);
+  eq(t.p.y, 168, '上の床を歩く y'); eq(t.p.x > 95, true, '上の床を歩く x=' + t.p.x);
+});
+test('ハシゴの上に床があるときも、上の段の床から下入力で床をすり抜けて梯子に降りることはできない', () => {
+  const t = setup(mkStage({ 6: FULL, 8: FULL }, { 6: '....P...........', 7: '....L...........', 8: '....L...........' }));
+  eq(t.p.x, 72, 'x'); eq(t.p.y, 168, 'y');
+  t.press('down'); t.tick(10);
+  eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 168, 'y');
+});
+test('途中に床がある長い梯子でも、床をすり抜けて上まで昇れるし、途中の床の高さで横に降りればその床に乗れる', () => {
+  const through = mkStage({ 6: FULL, 8: FULL }, { 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '.P..L...........' });
+  // そのまま上端(y=120)まで床をすり抜けて昇れる
+  const a = setup(through); a.p.x = 72;
+  a.press('up'); a.tick(1 + 96);
+  eq(a.p.y, 120, '上端 y'); eq(a.p.mode, 'ladder', '上端は穴なので ladder');
+  // 途中の床の高さ(y=168)で止まって横へ降りると、落下せずその床(y=168)に乗れる
+  const b = setup(through); b.p.x = 72;
+  b.press('up'); b.tick(1 + 48); b.release('up');
+  eq(b.p.y, 168, '途中の床の高さ'); eq(b.p.mode, 'ladder', 'まだ梯子上');
+  b.press('right'); holdUntil(b, () => b.p.mode === 'ground');
+  eq(b.p.y, 168, '床をすり抜けず y=168 に乗る'); eq(b.p.mode, 'ground', 'mode');
+});
 test('上の段では下入力しても梯子には乗らない（降りるときは穴を歩いて落ち、つかまる）', () => {
   const t = setup(LADDER_UP); t.p.x = 69; t.press('down'); t.tick(5);
   eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 168, 'y'); eq(t.p.x, 69, 'x');
