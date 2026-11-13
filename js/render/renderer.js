@@ -1,9 +1,11 @@
 /* ===== 描画 =====
  * Stage を読んで描くだけ。状態は変更しない。
+ * 順序: 物 -> アクター -> 床。床は厚み0の面だが、見えるように
+ * セル下端の FLOOR_DRAW_H ドットに描く（見た目だけの厚み）。
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
-  const { CELL_W, CELL_H, WIDTH, HEIGHT, BG_COLOR } = RK.CONFIG;
+  const { CELL_W, CELL_H, WIDTH, HEIGHT, BG_COLOR, FLOOR_DRAW_H } = RK.CONFIG;
 
   const Renderer = {
     showGrid: false,
@@ -21,6 +23,13 @@
       stage.spawns.forEach((s) => {
         RK.Sprites.draw(ctx, s.id, s.col * CELL_W, s.row * CELL_H, CELL_W, CELL_H);
       });
+      for (let r = 0; r < stage.rows; r++) {
+        for (let c = 0; c < stage.cols; c++) {
+          if (stage.hasFloor(c, r)) {
+            RK.Sprites.draw(ctx, 'floor', c * CELL_W, stage.surfaceY(r) - FLOOR_DRAW_H, CELL_W, FLOOR_DRAW_H);
+          }
+        }
+      }
 
       if (this.showGrid) this.drawGrid(ctx, stage);
     },
