@@ -9,7 +9,7 @@
   RK.Screen.init(canvas);
 
   const data = RK.StageData.stage01;
-  const stage = RK.Stage.parse(data.name, data.rows);
+  const stage = RK.Stage.parse(data.name, data);
 
   if (stage.errors.length) {
     errorsEl.hidden = false;
@@ -29,4 +29,5 @@
 
   RK.stage = stage; // デバッグ用（コンソールから確認できる）
   render();
+  RK.booted = true;
 })(window);
