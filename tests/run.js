@@ -1,5 +1,5 @@
 /* ヘッドレステスト: node tests/run.js
- * DOM を使わない部分（config / stage / input / loop / player / game）を Node の vm に読み込んで確認する。
+ * DOM を使わない部分（config / stage / input / loop / physics / player / game）を Node の vm に読み込んで確認する。
  * 新しいステップを作るたびに、そのルールのテストをここに足していく。 */
 const vm = require('vm');
 const fs = require('fs');
@@ -11,7 +11,7 @@ sandbox.window = sandbox;
 vm.createContext(sandbox);
 [
   'js/config.js', 'js/stage/symbols.js', 'js/stage/stage.js', 'js/data/stages/stage01.js',
-  'js/core/input.js', 'js/core/loop.js', 'js/entities/player.js', 'js/core/game.js',
+  'js/core/input.js', 'js/core/loop.js', 'js/physics/terrain.js', 'js/entities/player.js', 'js/core/game.js',
 ].forEach((f) => vm.runInContext(fs.readFileSync(path.join(root, f), 'utf8'), sandbox, { filename: f }));
 const RK = sandbox.RK;
 const C = RK.CONFIG;
@@ -26,9 +26,19 @@ function eq(actual, expected, what) {
   if (actual !== expected) throw new Error((what || 'value') + ': expected ' + expected + ', got ' + actual);
 }
 
+/** テスト用ステージ。rows = { 行番号: 16文字 }（無い行は全部 '.'）。floor / objects の2レイヤー */
+function mkStage(floor, objects) {
+  const blank = '.'.repeat(16);
+  const layer = (m) => { const a = []; for (let r = 0; r < C.ROWS; r++) a.push(m[r] || blank); return a; };
+  return { name: 'test', floor: layer(floor), objects: layer(objects) };
+}
+const FULL = '='.repeat(16);
+// 平らな地面だけ。P は (col1,row8) = x24,y216
+const FLAT = mkStage({ 8: FULL }, { 8: '.P..............' });
+
 /** テスト用ハーネス。1tick = 入力イベントを流して poll して Game.update */
-function setup() {
-  const game = RK.Game.create(RK.StageData.stage01);
+function setup(stageData) {
+  const game = RK.Game.create(stageData || RK.StageData.stage01);
   const input = RK.Input.create();
   return {
     game, input, p: game.player,
@@ -96,7 +106,7 @@ test('離せば止まる', () => {
 test('チョンを連打すると、押した回数 x TAP_DOTS', () => {
   const t = setup(); const x0 = t.p.x;
   for (let i = 0; i < 4; i++) { t.press('right'); t.tick(1); t.release('right'); t.tick(C.PLAYER_TAP_FRAMES); }
-  eq(t.p.x - x0, 4 * C.PLAYER_TAP_DOTS, '��動量');
+  eq(t.p.x - x0, 4 * C.PLAYER_TAP_DOTS, '移動量');
 });
 test('チョン中に逆方向を押すと、新しい向きでやり直す', () => {
   const t = setup(); const x0 = t.p.x;
@@ -123,14 +133,14 @@ test('タッチ入力もキーボードと同じ結果になる', () => {
   eq(a.p.x, b.p.x, 'x');
 });
 test('画面端で止まる（ループはステップ6）', () => {
-  const t = setup();
+  const t = setup(FLAT);
   t.press('left'); t.tick(400);
   eq(t.p.x, C.PLAYER_W / 2, '左端');
   t.release('left'); t.press('right'); t.tick(1000);
   eq(t.p.x, C.WIDTH - C.PLAYER_W / 2, '右端');
 });
-test('y（足）は動かない', () => {
-  const t = setup(); t.press('right'); t.tick(50); eq(t.p.y, 216, 'y');
+test('足場の上を歩いても y（足）は動かない', () => {
+  const t = setup(FLAT); t.press('right'); t.tick(50); eq(t.p.y, 216, 'y');
 });
 
 console.log('Player: ハンマー（仮）');
@@ -147,6 +157,143 @@ test('押しっぱなしでは繰り返さない / 離して押し直すと再�
 });
 test('ハンマーを振っても位置は変わらない', () => {
   const t = setup(); const x0 = t.p.x; t.press('hammer'); t.tick(30); eq(t.p.x, x0, 'x');
+});
+
+console.log('地形: 足場（床・樽）');
+// 床 row6 に穴(col5..8 = x80..143)。下の row8 は全面の床。P は (col1,row6) = x24,y168
+const HOLE = mkStage({ 6: '=====....=======', 8: FULL }, { 6: '.P..............' });
+// 樽 (col4,row8) = x64..79、上面 y=192。row7 の P はその上に立つ = x72,y192
+const BARREL_TOP = mkStage({ 8: FULL }, { 7: '....P...........', 8: '....O...........' });
+// 樽の真上(row6)に出現（足場なし）→ 落ちて樽の上で止まる
+const BARREL_DROP = mkStage({ 8: FULL }, { 6: '....P...........', 8: '....O...........' });
+
+test('stage01 のスポーン位置は足場の上', () => {
+  const t = setup(); eq(RK.Physics.isSupported(t.game.stage, t.p.x, t.p.y, t.p.w), true, 'supported');
+});
+test('1ドットでも乗っていれば立てる（床の右端）', () => {
+  const s = setup(HOLE).game.stage;
+  eq(RK.Physics.isSupported(s, 85, 168, 12), true, 'x=85 左端が床の最後の1ドット(79)');
+  eq(RK.Physics.isSupported(s, 86, 168, 12), false, 'x=86 全部穴の上');
+});
+test('1ドットでも乗っていれば立てる（穴の反対側＝床の左端）', () => {
+  const s = setup(HOLE).game.stage;
+  eq(RK.Physics.isSupported(s, 139, 168, 12), true, 'x=139 右端が床の最初の1ドット(144)');
+  eq(RK.Physics.isSupported(s, 138, 168, 12), false, 'x=138');
+});
+test('足場面の高さでなければ立っていない', () => {
+  const s = setup(HOLE).game.stage;
+  eq(RK.Physics.isSupported(s, 24, 170, 12), false, 'y=170');
+});
+test('樽の上面は足場。1ドットでも乗っていれば立てる', () => {
+  const s = setup(BARREL_TOP).game.stage;
+  eq(RK.Physics.isSupported(s, 72, 192, 12), true, '真上');
+  eq(RK.Physics.isSupported(s, 85, 192, 12), true, '右端1ドット');
+  eq(RK.Physics.isSupported(s, 86, 192, 12), false, '右へ外れた');
+  eq(RK.Physics.isSupported(s, 59, 192, 12), true, '左端1ドット');
+  eq(RK.Physics.isSupported(s, 58, 192, 12), false, '左へ外れた');
+});
+test('画面下端は足場として扱う（暫定）', () => {
+  const s = setup(mkStage({}, { 8: '.P..............' })).game.stage; // 床なし
+  eq(RK.Physics.isSupported(s, 24, C.HEIGHT, 12), true, 'y=HEIGHT');
+});
+
+console.log('Player: 通常落下');
+test('床の端から外れたら落ちる。全部が穴の上に出る x=86 で落下開始', () => {
+  const t = setup(HOLE);
+  t.press('right');
+  let n = 0; while (t.p.mode !== 'fall' && n++ < 200) t.tick();
+  eq(t.p.mode, 'fall', 'mode'); eq(t.p.x, 86, 'x'); eq(t.p.y, 168, 'y（まだ落ちていない）');
+});
+test('落下は 1tick = FALL_SPEED ドット。床(y=216)まで 24 tick で止まり、通常移動に戻る', () => {
+  const t = setup(HOLE);
+  t.press('right');
+  let n = 0; while (t.p.mode !== 'fall' && n++ < 200) t.tick();
+  t.tick(1); eq(t.p.y, 168 + C.PLAYER_FALL_SPEED, '1tick後');
+  let k = 1; while (t.p.mode === 'fall' && k++ < 200) t.tick();
+  eq(k, (216 - 168) / C.PLAYER_FALL_SPEED, '落下tick数'); eq(t.p.y, 216, 'y'); eq(t.p.mode, 'ground', 'mode');
+});
+test('落下中は左右入力を無視する（暫定）。着地後は押し続けで歩き出す', () => {
+  const t = setup(HOLE);
+  t.press('right');
+  let n = 0; while (t.p.mode !== 'fall' && n++ < 200) t.tick();
+  const x0 = t.p.x;
+  while (t.p.mode === 'fall') { t.tick(); if (t.p.mode === 'fall') eq(t.p.x, x0, '落下中のx'); }
+  eq(t.p.x, x0, '着地時のx');
+  t.tick(5); eq(t.p.x, x0 + 5 * C.PLAYER_SPEED, '着地後の移動');
+});
+test('途中の足場の無い高さは素通りし、床で止まる（row7 に床なし）', () => {
+  const s = setup(HOLE).game.stage;
+  const r = RK.Physics.fallTo(s, 110, 12, 168, 1000);
+  eq(r.landed, true, 'landed'); eq(r.y, 216, 'y');
+});
+test('足場の無いスポーン位置なら最初のtickから落ちる', () => {
+  const t = setup(BARREL_DROP);
+  t.tick(); eq(t.p.mode, 'fall', 'mode'); eq(t.p.y, 168 + C.PLAYER_FALL_SPEED, 'y');
+});
+test('樽の上で止まる（床まで落ちない）', () => {
+  const t = setup(BARREL_DROP);
+  t.tick(11); eq(t.p.mode, 'fall', '11tick後'); eq(t.p.y, 190, 'y');
+  t.tick(1); eq(t.p.mode, 'ground', '12tick後'); eq(t.p.y, 192, 'y');
+  t.tick(30); eq(t.p.y, 192, '立ち続ける');
+});
+test('速く落ちても樽を通り抜けない', () => {
+  const s = setup(BARREL_DROP).game.stage;
+  const r = RK.Physics.fallTo(s, 72, 12, 168, 100);
+  eq(r.landed, true, 'landed'); eq(r.y, 192, 'y');
+});
+test('樽の上を歩いて端から外れると落ちる（右 x=86 / 左 x=58）', () => {
+  const a = setup(BARREL_TOP);
+  eq(a.p.x, 72, 'x0'); eq(a.p.y, 192, 'y0');
+  a.tick(10); eq(a.p.mode, 'ground', '立っている'); eq(a.p.y, 192, 'y');
+  a.press('right'); let n = 0; while (a.p.mode !== 'fall' && n++ < 200) a.tick();
+  eq(a.p.x, 86, '右へ外れたx');
+  const b = setup(BARREL_TOP);
+  b.press('left'); n = 0; while (b.p.mode !== 'fall' && n++ < 200) b.tick();
+  eq(b.p.x, 58, '左へ外れたx');
+  b.release('left'); b.tick(30); eq(b.p.y, 216, '床に着地'); eq(b.p.mode, 'ground', 'mode');
+});
+test('チョンの途中で落ち始めても、着地後に残りのチョンは続かない', () => {
+  const t = setup(HOLE);
+  t.p.x = 85;                                  // あと1ドットで落ちる位置
+  t.press('right'); t.tick(1); t.release('right');   // チョン開始（3ドットのうち最初の1tickで0〜1ドット）
+  t.tick(40);
+  const x = t.p.x; t.tick(20); eq(t.p.x, x, '着地後に動き続けない');
+  eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 216, 'y');
+});
+
+console.log('Player: 樽にぶつかる（横）');
+const SIDE_L = mkStage({ 8: FULL }, { 8: '.P..O...........' });   // 樽 x64..79。P は樽の左 x24
+const SIDE_R = mkStage({ 8: FULL }, { 8: '....O..P........' });   // P は樽の右 x120
+test('左から押し続けると樽の手前(x=58)で止まる', () => {
+  const t = setup(SIDE_L); t.press('right'); t.tick(200); eq(t.p.x, 58, 'x'); eq(t.p.y, 216, 'y');
+});
+test('右から押し続けると樽の手前(x=86)で止まる', () => {
+  const t = setup(SIDE_R); t.press('left'); t.tick(300); eq(t.p.x, 86, 'x');
+});
+test('樽の手前でチョンしても動かない / 手前の1ドット手前なら1ドットだけ進む', () => {
+  const t = setup(SIDE_L); t.press('right'); t.tick(200); t.release('right'); t.tick(2);
+  t.press('right'); t.tick(1); t.release('right'); t.tick(20); eq(t.p.x, 58, '壁ぎわ');
+  t.p.x = 57; t.press('right'); t.tick(1); t.release('right'); t.tick(20); eq(t.p.x, 58, '1ドットだけ');
+});
+test('樽の手前では止まるが、反対向きには歩ける', () => {
+  const t = setup(SIDE_L); t.press('right'); t.tick(200); t.release('right'); t.tick(2);
+  t.press('left'); t.tick(20); eq(t.p.x < 58, true, 'x=' + t.p.x);
+});
+test('壁 W は横に通れる（樽だけが横のぶつかり。他は後で決める）', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.P..W...........' }));
+  t.press('right'); t.tick(100); eq(t.p.x > 80, true, 'x=' + t.p.x);
+});
+test('頭より上の樽(row7)の下は通れる', () => {
+  const t = setup(mkStage({ 8: FULL }, { 7: '....O...........', 8: '.P..............' }));
+  t.press('right'); t.tick(100); eq(t.p.x > 80, true, 'x=' + t.p.x);
+});
+test('樽に重なって出現しても、樽の外側へは抜けられる', () => {
+  // 出現位置を樽の中に置くステージは作れない（P が樽と同じセルに書けない）ので、後から樽の中へ置く
+  const g = setup(mkStage({ 8: FULL }, { 8: '.P..O...........' }));
+  g.p.x = 72;                                  // 樽(64..79)の真ん中
+  g.press('left'); g.tick(30); eq(g.p.x < 72, true, '左へ抜ける x=' + g.p.x);
+  const h = setup(mkStage({ 8: FULL }, { 8: '.P..O...........' }));
+  h.p.x = 72; h.press('right'); h.tick(30); eq(h.p.x > 72, true, '右へ抜ける x=' + h.p.x);
 });
 
 console.log('決定性・ループ');
