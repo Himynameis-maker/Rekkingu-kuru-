@@ -206,20 +206,136 @@ test('梯子につかまる範囲は端で折り返さない（右端の x=255 �
   eq(RK.Physics.ladderColAt(s, C.WIDTH - 1, 8), -1, 'x=255');
 });
 
-console.log('Player: ハンマー（仮）');
+console.log('Player: ハンマーと壁の破壊（ステップ7）');
 test('押した瞬間に表示開始し、HAMMER_FRAMES で消える', () => {
-  const t = setup();
+  const t = setup(FLAT);
   t.press('hammer'); t.tick(); eq(t.p.hammerFrames, C.HAMMER_FRAMES, '開始');
   t.tick(); eq(t.p.hammerFrames, C.HAMMER_FRAMES - 1, '1tick後');
   t.release('hammer'); t.tick(C.HAMMER_FRAMES); eq(t.p.hammerFrames, 0, '終了');
 });
-test('押しっぱなしでは繰り返さない / 離して押し直すと再開', () => {
-  const t = setup();
-  t.press('hammer'); t.tick(C.HAMMER_FRAMES + 5); eq(t.p.hammerFrames, 0, '長押し');
+test('押しっぱなしでは繰り返さない / クールタイム(HAMMER_COOLDOWN_FRAMES)後に押し直すと再開', () => {
+  const t = setup(FLAT);
+  t.press('hammer'); t.tick(C.HAMMER_COOLDOWN_FRAMES + 5); eq(t.p.hammerFrames, 0, '長押し');
   t.release('hammer'); t.tick(); t.press('hammer'); t.tick(); eq(t.p.hammerFrames, C.HAMMER_FRAMES, '再押下');
 });
-test('ハンマーを振っても位置は変わらない', () => {
-  const t = setup(); const x0 = t.p.x; t.press('hammer'); t.tick(30); eq(t.p.x, x0, 'x');
+test('壁3種（W / w / V）の初期耐久値は 1 / 2 / 3', () => {
+  const s = setup(mkStage({ 8: FULL }, { 8: 'P.WwV...........' })).game.stage;
+  eq(s.hpAt(2, 8), 1, 'W'); eq(s.hpAt(3, 8), 2, 'w'); eq(s.hpAt(4, 8), 3, 'V');
+  eq(s.hpAt(1, 8), 0, 'empty');
+});
+test('壁は背景（奥側）なので、W / w / V すべて横から通り抜けられる', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.P.WwV..........' }));
+  t.press('right'); t.tick(100);
+  eq(t.p.x > 90, true, '通り抜けられる x=' + t.p.x);
+});
+test('W は1回、w は2回、V は3回叩くと壊れる。壊れても床は残る', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.P.WwV..........' }));
+  const hitOnce = () => {
+    t.press('hammer'); t.tick(1); t.release('hammer');
+    t.tick(C.HAMMER_COOLDOWN_FRAMES);
+  };
+  // col3 (x=56) の W（耐久1）
+  t.p.x = 56;
+  hitOnce();
+  eq(t.game.stage.idAt(3, 8), 'empty', 'W 1回目で破壊');
+  eq(t.game.stage.hasFloor(3, 8), true, '床は残る');
+
+  // col4 (x=72) の w（耐久2）
+  t.p.x = 72;
+  hitOnce();
+  eq(t.game.stage.idAt(4, 8), 'wall_b', 'w 1回目は残る');
+  eq(t.game.stage.hpAt(4, 8), 1, 'w 残り耐久1');
+  hitOnce();
+  eq(t.game.stage.idAt(4, 8), 'empty', 'w 2回目で破壊');
+
+  // col5 (x=88) の V（耐久3）
+  t.p.x = 88;
+  hitOnce(); eq(t.game.stage.hpAt(5, 8), 2, 'V 1回目後');
+  hitOnce(); eq(t.game.stage.hpAt(5, 8), 1, 'V 2回目後');
+  hitOnce(); eq(t.game.stage.idAt(5, 8), 'empty', 'V 3回目で破壊');
+});
+test('画面奥の自分の中心がある1セルだけが叩かれ、隣の壁は同時破壊・ダメージを受けない', () => {
+  // col3 (x48..63) と col4 (x64..79) に W が並んでいる。境界ギリギリの x=63（中心は col3）で叩く
+  const t = setup(mkStage({ 8: FULL }, { 8: '.P.WW...........' }));
+  t.p.x = 63;
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  eq(t.game.stage.idAt(3, 8), 'empty', '中心がある col3 のみ破壊');
+  eq(t.game.stage.idAt(4, 8), 'wall_a', '隣の col4 は無傷');
+  eq(t.game.stage.hpAt(4, 8), 1, 'col4 の耐久値そのまま');
+});
+test('振ったあと HAMMER_LOCK_FRAMES(18tick = 0.3s) は歩行・梯子乗りを受け付けず、経過後に動ける', () => {
+  const t = setup(mkStage({ 8: FULL }, { 7: '.L..............', 8: 'PL..............' }));
+  t.p.x = 24;
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  eq(t.p.hammerLockFrames, C.HAMMER_LOCK_FRAMES, 'ロック開始');
+  // ロック中に右移動・上入力(梯子)を入れても動かない
+  t.press('right'); t.press('up');
+  t.tick(C.HAMMER_LOCK_FRAMES - 1);
+  eq(t.p.x, 24, 'ロック中は動かない'); eq(t.p.mode, 'ground', 'ロック中は梯子に乗らない');
+  // 18tick経過後（19tick目）から動ける
+  t.release('up'); t.tick(1);
+  eq(t.p.hammerLockFrames, 0, 'ロック解除');
+  eq(t.p.x > 24, true, 'ロック解除後に歩く x=' + t.p.x);
+});
+test('チョン移動中にハンマーを振ると即座に停止し、硬直明けにチョンの残りで勝手に動かない', () => {
+  const t = setup(FLAT); const x0 = t.p.x;
+  t.press('right'); t.tick(1); t.release('right');
+  const xAtSwing = t.p.x;
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  t.tick(C.HAMMER_LOCK_FRAMES + 10);
+  eq(t.p.x, xAtSwing, '硬直明けにチョンの残りで動かない');
+  eq(t.p.x >= x0, true, 'x');
+});
+test('ハンマークールタイム(HAMMER_COOLDOWN_FRAMES)中は連打しても次の壁を叩けない', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.P.w............' }));
+  t.p.x = 56; // col3 の w（耐久2）
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  eq(t.game.stage.hpAt(3, 8), 1, '1回目ヒット');
+  // クールタイム中に連打しても当たらない
+  for (let i = 0; i < 5; i++) {
+    t.tick(1); t.press('hammer'); t.tick(1); t.release('hammer');
+  }
+  eq(t.game.stage.hpAt(3, 8), 1, 'クールタイム中はダメージなし');
+  // クールタイム明けまで待ってから叩くと壊れる
+  t.tick(C.HAMMER_COOLDOWN_FRAMES);
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  eq(t.game.stage.idAt(3, 8), 'empty', 'クールタイム明けの2回目で破壊');
+});
+test('歩行クールタイムとハンマークールタイムは独立して機能する', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.P.w............' }));
+  t.p.x = 56;
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  // 歩行ロックだけ先に解除された状態を模擬
+  t.p.hammerLockFrames = 0;
+  t.press('right'); t.tick(1); t.release('right');
+  eq(t.p.x > 56, true, '歩行ロックが0なら歩ける');
+  // まだハンマークールタイムが残っているならハンマーは振れない
+  t.p.x = 56;
+  t.press('hammer'); t.tick(1); t.release('hammer');
+  eq(t.game.stage.hpAt(3, 8), 1, 'ハンマークールタイムが残っていれば振れない');
+});
+test('歩行可能な状態(ground)以外ではハンマーを振れない（通常落下中・梯子中）', () => {
+  // 梯子上の壁
+  const lad = setup(mkStage({ 6: '====.===========', 8: FULL }, { 7: '....L...........', 8: '.P..W...........' }));
+  // row8 col4 に L と W は同時に置けないので、row7 の L 上で row7 の W を別列に置く代わりに、梯子のセルで hammerPressed をテスト
+  const lad2 = setup(mkStage({ 6: '====.===========', 8: FULL }, { 7: '....L...........', 8: '.P..L...........' }));
+  lad2.p.x = 72;
+  lad2.press('up'); lad2.tick(5); lad2.release('up');
+  eq(lad2.p.mode, 'ladder', '梯子中');
+  lad2.press('hammer'); lad2.tick(1); lad2.release('hammer');
+  eq(lad2.p.hammerFrames, 0, '梯子中は振れない');
+  eq(lad2.p.hammerLockFrames, 0, '梯子中はロックも発生しない');
+
+  // 通常落下中
+  const fallSt = setup(mkStage({ 8: FULL }, { 6: '....P...........', 7: '....W...........' }));
+  fallSt.tick(1);
+  eq(fallSt.p.mode, 'fall', '落下中');
+  // 落下しながら row7 col4 の W を通過する間にハンマーを押しても振れず壁も無傷
+  for (let i = 0; i < 15; i++) {
+    fallSt.press('hammer'); fallSt.tick(1); fallSt.release('hammer');
+  }
+  eq(fallSt.p.hammerFrames, 0, '落下中は振れない');
+  eq(fallSt.game.stage.idAt(4, 7), 'wall_a', '落下中は壁を壊せない');
 });
 
 console.log('地形: 足場（床・樽）');
