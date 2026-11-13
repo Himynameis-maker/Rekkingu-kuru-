@@ -10,7 +10,7 @@
 (function (w) {
   const RK = (w.RK = w.RK || {});
   const { LAYER, byChar, byId } = RK.Symbols;
-  const { COLS, ROWS, CELL_H } = RK.CONFIG;
+  const { COLS, ROWS, CELL_W, CELL_H } = RK.CONFIG;
 
   class Stage {
     constructor(name, cols, rows) {
@@ -45,6 +45,21 @@
     /** row の下端（足場面）の y 座標 */
     surfaceY(row) {
       return (row + 1) * CELL_H;
+    }
+
+    /** x座標（ドット）が何列目か。ループはしない（範囲外は負やcols以上になる） */
+    colAt(x) {
+      return Math.floor(x / CELL_W);
+    }
+
+    /** 足の y 座標から「体が入っているセルの行」を返す。足がちょうど足場面(行の下端)にあるとき、その行を返す */
+    rowAtFeet(y) {
+      return Math.floor((y - 1) / CELL_H);
+    }
+
+    /** col 列の中心 x 座標 */
+    centerX(col) {
+      return col * CELL_W + CELL_W / 2;
     }
 
     setId(col, row, id) {

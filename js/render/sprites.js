@@ -71,5 +71,26 @@
   register('foreman',     actor('#0058f8', '#fff', '3'));
   register('fast_chaser', actor('#f8b800', '#000', '4'));
 
-  RK.Sprites = { register, draw, drawers };
+  /** 動いているアクター（x=中心, y=足, w, h, facing）を描く。体は登録済みの id のスプライトを使う。
+   *  向きの目印とハンマーは仮の表示。ドット絵にするときはここを差し替える。 */
+  function drawActor(ctx, a) {
+    const left = Math.round(a.x - a.w / 2);
+    const top = a.y - a.h;
+    draw(ctx, a.id, left, top, a.w, a.h);
+
+    // 向きの目印（白い点）
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(a.facing > 0 ? left + a.w - 4 : left + 2, top + 5, 2, 2);
+
+    // ハンマー（仮）: 前半は振り上げ、後半は振り下ろし
+    if (a.hammerFrames > 0) {
+      const up = a.hammerFrames > RK.CONFIG.HAMMER_FRAMES / 2;
+      const hx = a.facing > 0 ? left + a.w : left - 8;
+      const hy = top + (up ? 2 : 8);
+      ctx.fillStyle = '#e8e8e8'; ctx.fillRect(hx, hy, 8, 6);
+      ctx.fillStyle = '#a05828'; ctx.fillRect(a.facing > 0 ? hx - 4 : hx + 8, hy + 2, 4, 2);
+    }
+  }
+
+  RK.Sprites = { register, draw, drawActor, drawers };
 })(window);

@@ -16,6 +16,12 @@
   </div>
 </main>
 
+<!-- 擬似スティック（左下）とハンマーボタン（右下）。タッチでもマウスでも操作できる -->
+<div class="touch-ui" aria-label="タッチ操作">
+  <div id="stick" class="stick" role="group" aria-label="移動スティック"><div id="stick-knob" class="knob"></div></div>
+  <div id="btn-hammer" class="btn-hammer" role="button" aria-label="ハンマー">ハンマー</div>
+</div>
+
 <!-- 起動に失敗したとき、理由を画面に出す（真っ暗のままにしない） -->
 <script>
 (function () {
@@ -41,6 +47,11 @@
 <script src="js/stage/symbols.js"></script>
 <script src="js/stage/stage.js"></script>
 <script src="js/data/stages/stage01.js"></script>
+<script src="js/core/input.js"></script>
+<script src="js/core/touch.js"></script>
+<script src="js/core/loop.js"></script>
+<script src="js/entities/player.js"></script>
+<script src="js/core/game.js"></script>
 <script src="js/render/screen.js"></script>
 <script src="js/render/sprites.js"></script>
 <script src="js/render/renderer.js"></script>

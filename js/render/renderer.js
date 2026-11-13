@@ -10,7 +10,8 @@
   const Renderer = {
     showGrid: false,
 
-    drawStage(ctx, stage) {
+    /** actors を渡すと、動いているアクターを描く。省略時は stage.spawns の位置に仮の箱を描く（プレビュー/エディタ用） */
+    drawStage(ctx, stage, actors) {
       ctx.fillStyle = BG_COLOR;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -20,9 +21,13 @@
           if (id !== 'empty') RK.Sprites.draw(ctx, id, c * CELL_W, r * CELL_H, CELL_W, CELL_H);
         }
       }
-      stage.spawns.forEach((s) => {
-        RK.Sprites.draw(ctx, s.id, s.col * CELL_W, s.row * CELL_H, CELL_W, CELL_H);
-      });
+      if (actors) {
+        actors.forEach((a) => RK.Sprites.drawActor(ctx, a));
+      } else {
+        stage.spawns.forEach((s) => {
+          RK.Sprites.draw(ctx, s.id, s.col * CELL_W, s.row * CELL_H, CELL_W, CELL_H);
+        });
+      }
       for (let r = 0; r < stage.rows; r++) {
         for (let c = 0; c < stage.cols; c++) {
           if (stage.hasFloor(c, r)) {

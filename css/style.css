@@ -31,3 +31,40 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   max-width: 90vw; padding: 8px 12px; background: #3a0d12; color: #ffb4b4;
   white-space: pre-wrap;
 }
+
+/* ===== 擬似スティック / ハンマーボタン =====
+ * 画面の下の左右に固定。キャンバスとは独立しているので、位置やサイズはここだけで調整できる。
+ * touch-action:none と user-select:none は、ドラッグでスクロールや選択が起きないようにするため。 */
+.touch-ui {
+  --stick: 132px;
+  --knob: 56px;
+  --hammer: 96px;
+  position: fixed; inset: 0; pointer-events: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.stick, .btn-hammer {
+  position: absolute; pointer-events: auto; touch-action: none;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  border-radius: 50%;
+  border: 2px solid rgba(200, 200, 216, 0.35);
+  background: rgba(200, 200, 216, 0.08);
+}
+.stick {
+  left: calc(18px + env(safe-area-inset-left, 0px));
+  width: var(--stick); height: var(--stick);
+}
+.knob {
+  position: absolute; left: 50%; top: 50%;
+  width: var(--knob); height: var(--knob); margin: calc(var(--knob) / -2) 0 0 calc(var(--knob) / -2);
+  border-radius: 50%; background: rgba(252, 188, 60, 0.6);
+  pointer-events: none;
+}
+.stick.is-down { background: rgba(200, 200, 216, 0.16); }
+.btn-hammer {
+  right: calc(18px + env(safe-area-inset-right, 0px));
+  width: var(--hammer); height: var(--hammer);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: var(--accent); background: rgba(252, 188, 60, 0.12);
+  border-color: rgba(252, 188, 60, 0.55);
+}
+.btn-hammer.is-down { background: rgba(252, 188, 60, 0.5); color: var(--bg); }
