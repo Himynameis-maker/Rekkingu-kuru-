@@ -1,5 +1,5 @@
 /* ===== スプライト登録所 =====
- * symbol id → 描画関数 (ctx, x, y, w, h)。
+ * symbol id → 描画関数 (ctx, x, y, w, h, hp?, maxHp?)。
  * いまは色付きの仮図形。ドット絵に差し替えるときは register で上書きするだけ。
  * 描画は内部状態を読むだけで、ルールは持たない。
  */
@@ -9,9 +9,9 @@
 
   function register(id, fn) { drawers[id] = fn; }
 
-  function draw(ctx, id, x, y, cw, ch) {
+  function draw(ctx, id, x, y, cw, ch, hp, maxHp) {
     const fn = drawers[id];
-    if (fn) fn(ctx, x, y, cw, ch);
+    if (fn) fn(ctx, x, y, cw, ch, hp, maxHp);
   }
 
 
@@ -32,10 +32,22 @@
   });
   ['wall_a', 'wall_b', 'wall_c'].forEach((id, i) => {
     const c = ['#7c7c7c', '#4c78c8', '#58a858'][i];
-    register(id, (ctx, x, y, cw, ch) => {
+    register(id, (ctx, x, y, cw, ch, hp, maxHp) => {
       ctx.fillStyle = c; ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2);
       ctx.fillStyle = '#00000055';
       for (let yy = 8; yy < ch; yy += 8) ctx.fillRect(x + 1, y + yy, cw - 2, 1);
+      // 耐久値が減っている壁はひび割れを描く
+      if (maxHp && hp > 0 && hp < maxHp) {
+        const dmg = maxHp - hp;
+        ctx.fillStyle = '#000000cc';
+        ctx.fillRect(x + 4, y + 4, 2, 6);
+        ctx.fillRect(x + 6, y + 9, 4, 2);
+        if (dmg >= 2) {
+          ctx.fillRect(x + 10, y + 3, 2, 8);
+          ctx.fillRect(x + 5, y + 14, 5, 2);
+          ctx.fillRect(x + 3, y + 16, 3, 5);
+        }
+      }
     });
   });
   const ladder = (rail) => (ctx, x, y, cw, ch) => {
@@ -71,15 +83,13 @@
   register('foreman',     actor('#0058f8', '#fff', '3'));
   register('fast_chaser', actor('#f8b800', '#000', '4'));
 
-  const HAMMER_REACH = 8;   // 体の横からハンマーが出る長さ（仮のハンマーの幅）
-
   /** 動いているアクター（x=中心, y=足, w, h, facing）を描く。体は登録済みの id のスプライトを使う。
-   *  画面の左右はつながっているので、体（とハンマー）が端からはみ出すときは、反対側にも同じものを描く
+   *  画面の左右はつながっているので、体が端からはみ出すときは、反対側にも同じものを描く
    *  （キャンバスの外にはみ出した分は表示されない）。
    *  向きの目印とハンマーは仮の表示。ドット絵にするときは drawActorAt を差し替える。 */
   function drawActor(ctx, a) {
     const W = RK.CONFIG.WIDTH;
-    const reach = a.w / 2 + HAMMER_REACH;
+    const reach = a.w / 2 + 2;
     drawActorAt(ctx, a, a.x);
     if (a.x - reach < 0) drawActorAt(ctx, a, a.x + W);   // 左端からはみ出す → 右端にも
     if (a.x + reach > W) drawActorAt(ctx, a, a.x - W);   // 右端からはみ出す → 左端にも
@@ -95,13 +105,18 @@
     ctx.fillStyle = '#fff';
     ctx.fillRect(a.facing > 0 ? left + a.w - 4 : left + 2, top + 5, 2, 2);
 
-    // ハンマー（仮）: 前半は振り上げ、後半は振り下ろし
+    // ハンマー（仮）: 画面奥に向かって振る（前半は頭上に構え、後半は奥の壁へ叩きつける）
     if (a.hammerFrames > 0) {
       const up = a.hammerFrames > RK.CONFIG.HAMMER_FRAMES / 2;
-      const hx = a.facing > 0 ? left + a.w : left - 8;
-      const hy = top + (up ? 2 : 8);
+      const hx = Math.round(cx) - 4;
+      const hy = up ? top - 3 : top + 8;
+      if (!up) {
+        // 奥の壁を叩く衝撃枠
+        ctx.fillStyle = '#fcfc00';
+        ctx.fillRect(hx - 2, hy - 2, 12, 10);
+      }
       ctx.fillStyle = '#e8e8e8'; ctx.fillRect(hx, hy, 8, 6);
-      ctx.fillStyle = '#a05828'; ctx.fillRect(a.facing > 0 ? hx - 4 : hx + 8, hy + 2, 4, 2);
+      ctx.fillStyle = '#a05828'; ctx.fillRect(Math.round(cx) - 1, hy + 6, 2, 5);
     }
   }
 
