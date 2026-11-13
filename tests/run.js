@@ -436,14 +436,83 @@ test('下へ降りて下端(y=216)で足場に乗ると ground に戻る', () =>
   holdUntil(t, () => t.p.mode === 'ground');
   eq(t.p.y, 216, 'y'); eq(t.p.mode, 'ground', 'mode'); eq(t.p.x, 72, 'x');
 });
-test('上端で左右に歩くと上の床に降りられる（途中は梯子の上にとどまる）', () => {
+// 梯子のてっぺん（確定）: 床のある列へは横に入れない。床の無い列へは動ける
+const climbTop = (stage) => {
+  const t = setup(stage); t.p.x = 72;
+  t.press('up'); t.tick(1 + 48); t.release('up');   // 乗る1tick + 48ドット昇って y=168
+  return t;
+};
+test('てっぺんで右を押し続けても、体が右の床の端に重なる手前（中心+2）で止まる。上の段には立てない', () => {
+  const t = climbTop(LADDER); eq(t.p.y, 168, 'y');
+  t.press('right'); t.tick(120);
+  eq(t.p.x, 74, 'x'); eq(t.p.mode, 'ladder', 'mode'); eq(t.p.y, 168, 'y');
+});
+test('てっぺんで左を押し続けても、左の床の端に重なる手前（中心-2）で止まる', () => {
+  const t = climbTop(LADDER);
+  t.press('left'); t.tick(120);
+  eq(t.p.x, 70, 'x'); eq(t.p.mode, 'ladder', 'mode'); eq(t.p.y, 168, 'y');
+});
+test('てっぺんでチョン(3ドット)すると、2ドット進んだところで止まる（床につっかえる）', () => {
+  const t = climbTop(LADDER);
+  t.press('right'); t.tick(1); t.release('right'); t.tick(20);
+  eq(t.p.x, 72 + C.PLAYER_TAP_DOTS - 1, 'x'); eq(t.p.mode, 'ladder', 'mode');
+  t.press('left'); t.tick(1); t.release('left'); t.tick(20);
+  eq(t.p.x, 74 - C.PLAYER_TAP_DOTS, '左へのチョンは3ドット全部進む（中心-2までは余裕がある）'); eq(t.p.mode, 'ladder', 'mode');
+});
+test('てっぺんで止まっていても、上下入力で中心へ戻れるし、下へ降りられる', () => {
+  const t = climbTop(LADDER);
+  t.press('right'); t.tick(30); t.release('right');
+  eq(t.p.x, 74, 'x');
+  t.press('down'); t.tick(1); eq(t.p.x, 72, '中心へ戻る'); eq(t.p.y, 168 + C.PLAYER_CLIMB_SPEED, 'y');
+});
+test('途中の高さ（てっぺんでない）では、床の列へも動ける。中心から4ドット超で外れて落ちる（従来どおり）', () => {
   const t = setup(LADDER); t.p.x = 72;
-  t.press('up'); t.tick(1 + 48); t.release('up');
-  t.press('right'); t.tick(2);
-  eq(t.p.mode, 'ladder', '床に届く前'); eq(t.p.y, 168, 'y');
-  holdUntil(t, () => t.p.mode === 'ground', 60);
-  eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 168, 'y'); eq(t.p.x >= 75, true, 'x=' + t.p.x);
-  t.release('right'); t.tick(30); eq(t.p.y, 168, '落ちない');
+  t.press('up'); t.tick(1 + 46); t.release('up');       // y=170（てっぺんの2ドット下）
+  eq(t.p.y, 170, 'y');
+  t.press('right'); holdUntil(t, () => t.p.mode === 'fall');
+  eq(t.p.mode, 'fall', 'mode'); eq(t.p.x, 72 + C.LADDER_GRAB_DOTS + 1, 'x');
+});
+// 穴が2マス幅（col4,5）。てっぺんの右は床が無いので横に降りられる / 左（col3）は床があるので動けない
+const LADDER_WIDE_R = mkStage({ 6: '====..==========', 8: FULL }, LADDER_OBJ);
+test('てっぺんの横に床が無ければ（穴が広い）横に降りられる。中心から4ドット超で外れて落ち、床で止まる', () => {
+  const t = climbTop(LADDER_WIDE_R);
+  t.press('right'); holdUntil(t, () => t.p.mode === 'fall');
+  eq(t.p.mode, 'fall', 'mode'); eq(t.p.x, 72 + C.LADDER_GRAB_DOTS + 1, 'x'); eq(t.p.y, 168, 'y');
+  t.release('right'); holdUntil(t, () => t.p.mode === 'ground');
+  eq(t.p.y, 216, 'y'); eq(t.p.mode, 'ground', 'mode');
+});
+test('穴が広くても、床のある側（左）へは動けない。床の無い側（右）は動ける', () => {
+  const t = climbTop(LADDER_WIDE_R);
+  t.press('left'); t.tick(60);
+  eq(t.p.x, 70, 'x'); eq(t.p.mode, 'ladder', 'mode');
+});
+test('樽の上面もてっぺんの高さの足場なら入れない（足場のある列は床と同じ扱い）', () => {
+  // 穴は col4,5。梯子 col4 の row7,8。col5 の row7 に樽 → 上面 y=168 = てっぺんの高さ
+  const s = RK.Game.create(mkStage({ 6: '====..==========', 8: FULL }, { 7: '....LO..........', 8: '.P..L...........' })).stage;
+  eq(RK.Physics.blockedByFloorX(s, 75, 168, 12, 1), true, 'x=74→75 右へ（樽の上面の列に入る）');
+  eq(RK.Physics.blockedByFloorX(s, 74, 168, 12, 1), false, 'x=73→74 右へ');
+  const t = climbTop(mkStage({ 6: '====..==========', 8: FULL }, { 7: '....LO..........', 8: '.P..L...........' }));
+  t.press('right'); t.tick(60);
+  eq(t.p.x, 74, 'x'); eq(t.p.mode, 'ladder', 'mode');
+});
+test('blockedByFloorX: 足場のある列へ新しく入る一歩だけ止める。すでに入っているなら通す', () => {
+  const s = RK.Game.create(LADDER).stage;     // 穴は col4 だけ（x64..79）
+  eq(RK.Physics.blockedByFloorX(s, 75, 168, 12, 1), true, '右 74→75');
+  eq(RK.Physics.blockedByFloorX(s, 74, 168, 12, 1), false, '右 73→74');
+  eq(RK.Physics.blockedByFloorX(s, 69, 168, 12, -1), true, '左 70→69');
+  eq(RK.Physics.blockedByFloorX(s, 70, 168, 12, -1), false, '左 71→70');
+  eq(RK.Physics.blockedByFloorX(s, 76, 168, 12, 1), false, '右 75→76（先頭がすでに床の列。通す）');
+  eq(RK.Physics.blockedByFloorX(s, 75, 144, 12, 1), false, '足場面になる床の無い高さ(y=144)なら止めない');
+});
+test('blockedByFloorX: 画面の端をまたぐ一歩も反対側の列で判定する', () => {
+  // col0 だけ床（col1〜15 は穴）: 右端から col0 へ入る一歩は止める
+  const a = RK.Game.create(mkStage({ 6: '=' + '.'.repeat(15), 8: FULL }, { 8: '.P..............' })).stage;
+  eq(RK.Physics.blockedByFloorX(a, C.WIDTH - 5, 168, 12, 1), true, '右端 x=250→251: 先頭が col0（床）へ');
+  eq(RK.Physics.blockedByFloorX(a, C.WIDTH - 6, 168, 12, 1), false, '右端 x=249→250: まだ col15（穴）');
+  // col0 だけ穴（col1〜15 は床）: 左端から col15 へ入る一歩は止める
+  const b = RK.Game.create(mkStage({ 6: '.' + '='.repeat(15), 8: FULL }, { 8: '.P..............' })).stage;
+  eq(RK.Physics.blockedByFloorX(b, 5, 168, 12, -1), true, '左端 x=6→5: 先頭が col15（床）へ');
+  eq(RK.Physics.blockedByFloorX(b, 6, 168, 12, -1), false, '左端 x=7→6: まだ col0（穴）');
 });
 test('上の段では下入力しても梯子には乗らない（降りるときは穴を歩いて落ち、つかまる）', () => {
   const t = setup(LADDER_UP); t.p.x = 69; t.press('down'); t.tick(5);
