@@ -71,10 +71,23 @@
   register('foreman',     actor('#0058f8', '#fff', '3'));
   register('fast_chaser', actor('#f8b800', '#000', '4'));
 
+  const HAMMER_REACH = 8;   // 体の横からハンマーが出る長さ（仮のハンマーの幅）
+
   /** 動いているアクター（x=中心, y=足, w, h, facing）を描く。体は登録済みの id のスプライトを使う。
-   *  向きの目印とハンマーは仮の表示。ドット絵にするときはここを差し替える。 */
+   *  画面の左右はつながっているので、体（とハンマー）が端からはみ出すときは、反対側にも同じものを描く
+   *  （キャンバスの外にはみ出した分は表示されない）。
+   *  向きの目印とハンマーは仮の表示。ドット絵にするときは drawActorAt を差し替える。 */
   function drawActor(ctx, a) {
-    const left = Math.round(a.x - a.w / 2);
+    const W = RK.CONFIG.WIDTH;
+    const reach = a.w / 2 + HAMMER_REACH;
+    drawActorAt(ctx, a, a.x);
+    if (a.x - reach < 0) drawActorAt(ctx, a, a.x + W);   // 左端からはみ出す → 右端にも
+    if (a.x + reach > W) drawActorAt(ctx, a, a.x - W);   // 右端からはみ出す → 左端にも
+  }
+
+  /** アクターを中心x = cx の位置に1つ描く */
+  function drawActorAt(ctx, a, cx) {
+    const left = Math.round(cx - a.w / 2);
     const top = a.y - a.h;
     draw(ctx, a.id, left, top, a.w, a.h);
 
