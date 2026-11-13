@@ -18,6 +18,10 @@
  *   はみ出していても、反対側の列として扱う（足場も樽も、はみ出した分は反対側の列で判定する）。
  *   中心 x が画面の外へ出たら反対側へ移す処理は player.js（wrapX を使う）。梯子の探索は端で折り返さない（縦だけ）。
  *
+ * 梯子のてっぺん（確定）: 穴の上に出た梯子の上端(y = span.top)では、床のある列（足場になる列）へは横に入れない。
+ *   足が床につっかえて届かない扱い。blockedByFloorX が「その一歩が足場のある列へ新しく入るか」を答える。床は動かない物なので、
+ *   樽の blockedX と同じ形の「入れないマス」として扱う。床の無い列（穴が広いとき）へは動けて、梯子の範囲を出れば落ちる。
+ *
  * 梯子（ステップ5）: 物レイヤーの 'ladder' / 'ladder_solid' の縦に連なったセル。
  *   span = { top, bottom }。top = 一番上のセルの上端 y（= 上の足場面の高さ）、bottom = 一番下のセルの下端 y（= 下の足場面の高さ）。
  *   乗れる/つかまれる/つかまっていられるのは、梯子の中心から LADDER_GRAB_DOTS ドット以内（暫定）。梯子は床ではない（足場にならない）。
@@ -37,17 +41,23 @@
   /** ドットの横位置 dot（画面の外でもよい）がある列。画面の端でつながっている */
   function colOfDot(dot) { return wrapCol(Math.floor(dot / C.CELL_W)); }
 
+  /** 列 c が、足の高さ y で足場になるか（床: 上のセルの下端の面 / 樽: 下のセルの上面）。画面下端は常に足場（暫定） */
+  function supportsColumn(stage, c, y) {
+    if (y >= C.HEIGHT) return true;          // 画面下端（暫定）
+    if (y % H !== 0) return false;           // 足場面は H の倍数の高さにしか無い
+    const row = y / H;                       // この y は「row の上端」かつ「row-1 の下端」
+    if (stage.hasFloor(c, row - 1)) return true;           // 上のセルの下端 = 床
+    return stage.idAt(c, row) === BARREL;                  // 下のセルの樽の上面
+  }
+
   /** 足を y に置いた体が、x の位置で足場に乗っているか。体が画面の端をまたいでいてもよい */
   function isSupported(stage, x, y, bw) {
     if (y >= C.HEIGHT) return true;          // 画面下端（暫定）
     if (y % H !== 0) return false;           // 足場面は H の倍数の高さにしか無い
-    const row = y / H;                       // この y は「row の上端」かつ「row-1 の下端」
     const first = Math.floor((x - bw / 2) / C.CELL_W);       // 画面の外なら負や COLS 以上になる
     const last = Math.floor((x + bw / 2 - 1) / C.CELL_W);
     for (let k = first; k <= last; k++) {
-      const c = wrapCol(k);
-      if (stage.hasFloor(c, row - 1)) return true;         // 上のセルの下端 = 床
-      if (stage.idAt(c, row) === BARREL) return true;      // 下のセルの樽の上面
+      if (supportsColumn(stage, wrapCol(k), y)) return true;
     }
     return false;
   }
@@ -89,6 +99,17 @@
     return !barrelInColumn(stage, lead(nx - dir), y, bh);   // いま既に樽の列なら通す
   }
 
+  /**
+   * 梯子のてっぺん用。体を nx（新しい中心x）へ 1 ドット動かす一歩が、足場のある列（足の高さ y で床か樽の上面がある列）へ
+   * 「新しく入る」か。dir = -1/1。入るなら true（動けない）。
+   * すでに先頭の列が足場のある列なら止めない（blockedX と同じ考え方。抜けられなくなるのを防ぐ）。画面の端をまたいでも反対側の列で判定。
+   */
+  function blockedByFloorX(stage, nx, y, bw, dir) {
+    const lead = (x) => colOfDot(dir > 0 ? x + bw / 2 - 1 : x - bw / 2);
+    if (!supportsColumn(stage, lead(nx), y)) return false;
+    return !supportsColumn(stage, lead(nx - dir), y);
+  }
+
   function isLadderId(id) { return id === 'ladder' || id === 'ladder_solid'; }
 
   /**
@@ -113,5 +134,5 @@
     return Math.abs(xw - stage.centerX(col)) <= C.LADDER_GRAB_DOTS ? col : -1;
   }
 
-  RK.Physics = Object.freeze({ isSupported, fallTo, blockedX, ladderSpan, ladderColAt, wrapX });
+  RK.Physics = Object.freeze({ isSupported, fallTo, blockedX, blockedByFloorX, ladderSpan, ladderColAt, wrapX });
 })(window);
