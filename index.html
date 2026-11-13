@@ -16,6 +16,26 @@
   </div>
 </main>
 
+<!-- 起動に失敗したとき、理由を画面に出す（真っ暗のままにしない） -->
+<script>
+(function () {
+  function show(msg) {
+    var e = document.getElementById('errors');
+    if (!e) return;
+    e.hidden = false;
+    e.textContent += msg + '\n';
+  }
+  window.addEventListener('error', function (ev) {
+    var t = ev.target;
+    if (t && t.tagName === 'SCRIPT') show('読み込み失敗: ' + t.getAttribute('src'));
+    else show('エラー: ' + ev.message + ' (' + String(ev.filename || '').split('/').pop() + ':' + ev.lineno + ')');
+  }, true);
+  window.addEventListener('load', function () {
+    if (!(window.RK && window.RK.booted)) show('起動できていません。index.html と js / css フォルダを同じ場所に置いて、ブラウザで index.html を直接開いてください。');
+  });
+})();
+</script>
+
 <!-- 読み込み順が依存順。file:// で直接開けるよう ES Modules は使わない（context.md 参照） -->
 <script src="js/config.js"></script>
 <script src="js/stage/symbols.js"></script>
