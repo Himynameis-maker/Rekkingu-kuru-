@@ -1,0 +1,33 @@
+:root {
+  --bg: #0b0b14;
+  --fg: #c8c8d8;
+  --accent: #fcbc3c;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); }
+body {
+  font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+           env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  touch-action: manipulation;
+}
+.stage-wrap {
+  height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px;
+}
+canvas {
+  display: block;
+  background: #000;
+  image-rendering: pixelated;      /* ドットをぼかさず整数倍で拡大 */
+}
+.bar { display: flex; gap: 12px; align-items: center; height: 32px; }
+button {
+  font: inherit; color: var(--bg); background: var(--accent);
+  border: 0; padding: 6px 10px; cursor: pointer;
+}
+button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.errors {
+  max-width: 90vw; padding: 8px 12px; background: #3a0d12; color: #ffb4b4;
+  white-space: pre-wrap;
+}
