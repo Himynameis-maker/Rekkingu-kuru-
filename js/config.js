@@ -5,6 +5,7 @@
  * 例: 縦をもっと細くしたければ CELL_H=28, ROWS=8 など。ステージデータの行数も合わせる。
  *
  * 【操作感の調整はここ】プレイヤーの移動は PLAYER_SPEED / PLAYER_TAP_DOTS / PLAYER_TAP_FRAMES の3つ。
+ * 落ちる速さは PLAYER_FALL_SPEED。
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
@@ -30,6 +31,9 @@
     PLAYER_TAP_DOTS: 3,     // 「チョン押し」で進むドット数（押した瞬間に確定。途中で離しても最後まで進む）
     PLAYER_TAP_FRAMES: 6,   // チョンの動きにかけるtick数。この間押し続けていたら、その後は連続移動
                             // 推奨: PLAYER_TAP_DOTS <= PLAYER_TAP_FRAMES * PLAYER_SPEED（加速が滑らかになる）
+
+    // --- 通常落下（ステップ4。暫定値） ---
+    PLAYER_FALL_SPEED: 2,   // 通常落下の速さ。1tickあたり下へ進むドット数（整数・加速なし）。24ドット(1セル)を12tick
 
     // --- ハンマー（仮。ステップ7で攻撃判定ごと置き換える。いまは見た目の表示だけ） ---
     HAMMER_FRAMES: 12,      // ボタンを押してからハンマーを表示するtick数
