@@ -13,6 +13,14 @@
  * 横にぶつかるもの: 樽だけ（確定）。樽の当たりはセル全体（16 x 24）とする（暫定）。
  *   すでに樽に重なっているときは、外へ向かう動きを止めない（抜けられなくなるのを防ぐ）。
  * 画面下端（y = HEIGHT）は常に足場として扱う（暫定。床の無いステージで無限に落ちないための安全策）。
+ *
+ * 左右ループ（ステップ6）: 画面の左端と右端はつながっている。体のドットが画面の外（x < 0 や x >= WIDTH）に
+ *   はみ出していても、反対側の列として扱う（足場も樽も、はみ出した分は反対側の列で判定する）。
+ *   中心 x が画面の外へ出たら反対側へ移す処理は player.js（wrapX を使う）。梯子の探索は端で折り返さない（縦だけ）。
+ *
+ * 梯子（ステップ5）: 物レイヤーの 'ladder' / 'ladder_solid' の縦に連なったセル。
+ *   span = { top, bottom }。top = 一番上のセルの上端 y（= 上の足場面の高さ）、bottom = 一番下のセルの下端 y（= 下の足場面の高さ）。
+ *   乗れる/つかまれる/つかまっていられるのは、梯子の中心から LADDER_GRAB_DOTS ドット以内（暫定）。梯子は床ではない（足場にならない）。
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
@@ -20,14 +28,24 @@
   const H = C.CELL_H;
   const BARREL = 'barrel';
 
-  /** 足を y に置いた体が、x の位置で足場に乗っているか */
+  /** 横位置 x を 0 〜 WIDTH-1 に収める（画面の左右はつながっている）。負の値も正しく扱う */
+  function wrapX(x) { return ((x % C.WIDTH) + C.WIDTH) % C.WIDTH; }
+
+  /** 列番号を 0 〜 COLS-1 に収める。-1 → 最後の列、COLS → 0列目 */
+  function wrapCol(c) { return ((c % C.COLS) + C.COLS) % C.COLS; }
+
+  /** ドットの横位置 dot（画面の外でもよい）がある列。画面の端でつながっている */
+  function colOfDot(dot) { return wrapCol(Math.floor(dot / C.CELL_W)); }
+
+  /** 足を y に置いた体が、x の位置で足場に乗っているか。体が画面の端をまたいでいてもよい */
   function isSupported(stage, x, y, bw) {
     if (y >= C.HEIGHT) return true;          // 画面下端（暫定）
     if (y % H !== 0) return false;           // 足場面は H の倍数の高さにしか無い
     const row = y / H;                       // この y は「row の上端」かつ「row-1 の下端」
-    const c0 = stage.colAt(x - bw / 2);
-    const c1 = stage.colAt(x + bw / 2 - 1);
-    for (let c = c0; c <= c1; c++) {
+    const first = Math.floor((x - bw / 2) / C.CELL_W);       // 画面の外なら負や COLS 以上になる
+    const last = Math.floor((x + bw / 2 - 1) / C.CELL_W);
+    for (let k = first; k <= last; k++) {
+      const c = wrapCol(k);
       if (stage.hasFloor(c, row - 1)) return true;         // 上のセルの下端 = 床
       if (stage.idAt(c, row) === BARREL) return true;      // 下のセルの樽の上面
     }
@@ -65,11 +83,35 @@
    * すでに先頭の列が樽の中にあるとき（出現位置や、将来 樽が落ちてきた場合）は止めず、外へ抜けられるようにする。
    */
   function blockedX(stage, nx, y, bw, bh, dir) {
-    const lead = (x) => stage.colAt(dir > 0 ? x + bw / 2 - 1 : x - bw / 2);
+    const lead = (x) => colOfDot(dir > 0 ? x + bw / 2 - 1 : x - bw / 2);   // 画面の端をまたいでも反対側の列になる
     const newCol = lead(nx);
     if (!barrelInColumn(stage, newCol, y, bh)) return false;
     return !barrelInColumn(stage, lead(nx - dir), y, bh);   // いま既に樽の列なら通す
   }
 
-  RK.Physics = Object.freeze({ isSupported, fallTo, blockedX });
+  function isLadderId(id) { return id === 'ladder' || id === 'ladder_solid'; }
+
+  /**
+   * col 列の梯子の範囲。y は足の高さ。梯子のセルの途中・上端(足場面)・下端のどこでも同じ範囲を返す。
+   * その高さに梯子が無ければ null。梯子の探索は縦だけ（左右の画面端は関係ない）。
+   */
+  function ladderSpan(stage, col, y) {
+    let r = Math.floor((y - 1) / H);                         // 足があるセル（足場面ちょうどなら、その上のセル）
+    if (!isLadderId(stage.idAt(col, r))) r = Math.floor(y / H); // 梯子の上端にいるとき: すぐ下のセル
+    if (!isLadderId(stage.idAt(col, r))) return null;
+    let t = r; let b = r;
+    while (isLadderId(stage.idAt(col, t - 1))) t--;
+    while (isLadderId(stage.idAt(col, b + 1))) b++;
+    return { top: t * H, bottom: (b + 1) * H };
+  }
+
+  /** x の位置の列の、row 行目に梯子があり、中心から LADDER_GRAB_DOTS 以内なら その列番号。無ければ -1 */
+  function ladderColAt(stage, x, row) {
+    const xw = wrapX(x);
+    const col = stage.colAt(xw);
+    if (!isLadderId(stage.idAt(col, row))) return -1;
+    return Math.abs(xw - stage.centerX(col)) <= C.LADDER_GRAB_DOTS ? col : -1;
+  }
+
+  RK.Physics = Object.freeze({ isSupported, fallTo, blockedX, ladderSpan, ladderColAt, wrapX });
 })(window);
