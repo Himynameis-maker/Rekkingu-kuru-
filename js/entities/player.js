@@ -3,18 +3,20 @@
  *   体の矩形: 左 = x - w/2, 上 = y - h, 右 = x + w/2, 下 = y
  *   いるセル: col = stage.colAt(x), row = stage.rowAtFeet(y)
  *
- * ステップ6の範囲: 左右移動（樽には横から通れない。画面の左右端はつながっている）、床・樽の上に立つ、
- *   足場が無くなったら通常落下、梯子の昇降。
+ * ステップ7の範囲: 左右移動（樽には横から通れない。壁は背景側なので通れる。画面の左右端はつながっている）、
+ *   床・樽の上に立つ、足場が無くなったら通常落下、梯子の昇降、ハンマー攻撃（画面奥に振り、壁W/w/Vを破壊）。
  * 中心x は常に 0 〜 WIDTH-1。端を越えたら反対側へ移る（moveX）。体が端をまたいでいる間の足場・樽の判定は terrain.js。
- * まだ無いもの: 攻撃判定(7)、異常落下(8)、樽以外との横の衝突。
+ * まだ無いもの: 異常落下(8)、敵(8)、鉄柱・爆弾・扉の挙動(9)。
  * 描画はこのファイルに無い（sprites.js）。足場・衝突の判定は physics/terrain.js。ここは状態を更新するだけ。
  *
- * mode（通常落下と異常落下は別状態にする。いまは 'ground' と 'fall' だけ）:
+ * mode（通常落下と異常落下は別状態にする。いまは 'ground' / 'fall' / 'ladder'）:
  *  - 'ground': 足場の上。左右に動ける。毎tick、足場に乗っているかを確認し、乗っていなければ 'fall' へ。
+ *              歩行可能なこの状態でのみハンマーを振れる。振った瞬間に画面奥の1セル（自分の中心があるセル）を1回叩き、
+ *              HAMMER_LOCK_FRAMES の間は行動を受け付けず、HAMMER_COOLDOWN_FRAMES の間は次のハンマーを振れない。
  *  - 'fall'  : 通常落下。1tick に PLAYER_FALL_SPEED ドット下へ。足場（床か樽の上）で止まり 'ground' に戻る。
- *              落下中は左右入力を無視する（暫定。context.md §9 / §11）。ハンマーの表示は受け付ける（仮）。
+ *              落下中は左右入力を無視する（暫定。context.md §9 / §11）。ハンマーは振れない。
  *              落下中に上入力があり、体の足元に梯子（中心から LADDER_GRAB_DOTS 以内）があれば、つかまって 'ladder' へ。
- *  - 'ladder': 梯子の上。上下入力で PLAYER_CLIMB_SPEED ドット/tick で昇り降り（x は中心へ寄る）。
+ *  - 'ladder': 梯子の上。上下入力で PLAYER_CLIMB_SPEED ドット/tick で昇り降り（x は中心へ寄る）。ハンマーは振れない。
  *              昇り降りしていない tick は、どの高さでも左右に動ける。中心から LADDER_GRAB_DOTS ドットを超えて離れたら梯子から外れ、
  *              その高さに足場があれば 'ground' に乗り、なければ通常落下。
  *              梯子の真上に床がある場合に限り、床をすり抜けて昇れ、上端(span.top)でその床('ground')に乗れる（確定）。
@@ -40,12 +42,14 @@
       y: stage.surfaceY(spawn.row),
       w: C.PLAYER_W,
       h: C.PLAYER_H,
-      facing: 1,                          // 向き。-1=左 / 1=右（ハンマーは向いている方向に振る）
+      facing: 1,                          // 向き。-1=左 / 1=右
       mode: 'ground',                     // 'ground' / 'fall'（通常落下）/ 'ladder'。将来: 'abnormal_fall'
       ladderCol: -1,                      // 'ladder' のとき乗っている梯子の列
       stepDir: 0,                         // チョン移動の向き
       stepTick: C.PLAYER_TAP_FRAMES,      // チョン開始からの経過tick。PLAYER_TAP_FRAMES 以上なら「チョンではない」
-      hammerFrames: 0,                    // 仮: ハンマー表示の残りtick（0なら非表示）
+      hammerFrames: 0,                    // ハンマー表示の残りtick（0なら非表示）
+      hammerLockFrames: 0,                // ハンマー後の行動受付不可の残りtick（歩行クールタイム）
+      hammerCooldown: 0,                  // 次にハンマーを振れるまでの残りtick（ハンマークールタイム）
     };
   }
 
@@ -70,6 +74,7 @@
     p.mode = 'fall';
     p.stepDir = 0;
     p.stepTick = C.PLAYER_TAP_FRAMES;
+    p.hammerLockFrames = 0;
   }
 
   /** 梯子に乗る。x を梯子の中心へスナップし、チョンの途中だったら捨てる */
@@ -79,6 +84,18 @@
     p.x = stage.centerX(col);
     p.stepDir = 0;
     p.stepTick = C.PLAYER_TAP_FRAMES;
+  }
+
+  /** ハンマーを画面奥に振る。振った瞬間に1回だけ、自分の中心がある奥の1セルにダメージを与える（同時破壊なし） */
+  function swingHammer(p, stage) {
+    p.hammerFrames = C.HAMMER_FRAMES;
+    p.hammerLockFrames = C.HAMMER_LOCK_FRAMES;
+    p.hammerCooldown = C.HAMMER_COOLDOWN_FRAMES;
+    p.stepDir = 0;
+    p.stepTick = C.PLAYER_TAP_FRAMES;
+    const col = stage.wrapCol(stage.colAt(p.x));
+    const row = stage.rowAtFeet(p.y);
+    stage.damageCell(col, row, 1);
   }
 
   /** 通常落下の1tick。上入力で梯子につかまる。足場に当たったらそこで止まって 'ground' に戻る */
@@ -148,22 +165,31 @@
       p.mode = 'ground';                                          // 梯子の端で足場に乗った
     } else if (Math.abs(p.x - cx) > C.LADDER_GRAB_DOTS) {
       if (RK.Physics.isSupported(stage, p.x, p.y, p.w)) p.mode = 'ground';   // 途中の床の高さで横に降りて床に乗った
-      else startFall(p);                                                     // 梯子から外れて落下
+      else startFall(p);                                                     // 梯子から外れた
     }
   }
 
   /** 1tick 進める。input は RK.Input の poll() の結果 */
   function update(p, input, stage) {
+    if (p.hammerFrames > 0) p.hammerFrames--;
+    if (p.hammerLockFrames > 0) p.hammerLockFrames--;
+    if (p.hammerCooldown > 0) p.hammerCooldown--;
+
     // 足場が（スポーン位置や、将来は破壊で）無くなっていたら、この tick から落ちる
     if (p.mode === 'ground' && !RK.Physics.isSupported(stage, p.x, p.y, p.w)) startFall(p);
 
-    if (p.mode === 'fall') updateFall(p, input, stage);   // 着地した tick は移動しない
-    else if (p.mode === 'ladder') updateLadder(p, input, stage);
-    else updateGround(p, input, stage);
-
-    // --- ハンマー（仮。押した瞬間に表示開始。長押しでは繰り返さない） ---
-    if (p.hammerFrames > 0) p.hammerFrames--;
-    if (input.hammerPressed) p.hammerFrames = C.HAMMER_FRAMES;
+    if (p.mode === 'fall') {
+      updateFall(p, input, stage);   // 着地した tick は移動しない
+    } else if (p.mode === 'ladder') {
+      updateLadder(p, input, stage);
+    } else {
+      // 歩行可能な状態('ground')でのみハンマーを振れる。振ったあと HAMMER_LOCK_FRAMES は行動を受け付けない
+      if (input.hammerPressed && p.hammerCooldown === 0 && p.hammerLockFrames === 0) {
+        swingHammer(p, stage);
+      } else if (p.hammerLockFrames === 0) {
+        updateGround(p, input, stage);
+      }
+    }
   }
 
   RK.Player = Object.freeze({ create, update, moveX });
