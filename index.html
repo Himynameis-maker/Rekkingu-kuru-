@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Rerikuru</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="stage-wrap">
+  <canvas id="screen" width="256" height="224"></canvas>
+  <div id="errors" class="errors" hidden></div>
+  <div class="bar">
+    <span id="status"></span>
+    <button id="btn-grid" type="button">グリッド表示 (G)</button>
+  </div>
+</main>
+
+<!-- 読み込み順が依存順。file:// で直接開けるよう ES Modules は使わない（context.md 参照） -->
+<script src="js/config.js"></script>
+<script src="js/stage/symbols.js"></script>
+<script src="js/stage/stage.js"></script>
+<script src="js/data/stages/stage01.js"></script>
+<script src="js/render/screen.js"></script>
+<script src="js/render/sprites.js"></script>
+<script src="js/render/renderer.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
