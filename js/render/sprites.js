@@ -24,10 +24,11 @@
   }
 
   // 地形・オブジェクト（仮）
+  // 床: 厚み0の面を見えるようにした細い帯（高さ = FLOOR_DRAW_H）
   register('floor', (ctx, x, y, cw, ch) => {
     ctx.fillStyle = '#b8541c'; ctx.fillRect(x, y, cw, ch);
-    ctx.fillStyle = '#f0a060'; ctx.fillRect(x, y, cw, 2);
-    ctx.fillStyle = '#6c2c08'; ctx.fillRect(x, y + ch - 2, cw, 2);
+    ctx.fillStyle = '#f0a060'; ctx.fillRect(x, y, cw, 1);
+    ctx.fillStyle = '#6c2c08'; ctx.fillRect(x, y + ch - 1, cw, 1);
   });
   ['wall_a', 'wall_b', 'wall_c'].forEach((id, i) => {
     const c = ['#7c7c7c', '#4c78c8', '#58a858'][i];
