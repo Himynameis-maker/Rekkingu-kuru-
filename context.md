@@ -9,11 +9,11 @@
 
 ## 0. いまの状態（まずここだけ読めば把握できる）
 - **作っているもの**: ファミコン時代の固定画面2Dアクションパズル（ハンマーで壊し、敵の挙動を利用してクリア）の再構築。ブラウザで動く（HTML + Canvas + 素のJS）。
-- **できていること**: ステージ表示（2レイヤー）、固定60Hzループ、キーボード/擬似スティック/ハンマーボタンの入力、プレイヤーの左右移動（チョン押し + 連続）、ハンマー入力の受け付け（表示だけ）。
-- **まだ無いこと**: 床判定と落下、梯子、画面端ループ、ハンマーの攻撃判定、敵、樽・鉄柱・爆弾・扉の挙動、ゲーム進行、エディタ。プレイヤーは**壁や樽をすり抜ける**（横の衝突が未実装）。
-- **次にやること**: 「進捗」の 3b と 4（横の衝突の方針決め + 床判定と通常落下）。ただし先に、ステップ3の操作感をユーザーが実機で確認し、§9 の値を調整する。
+- **できていること**: ステージ表示（2レイヤー）、固定60Hzループ、キーボード/擬似スティック/ハンマーボタンの入力、プレイヤーの左右移動（チョン押し + 連続）、ハンマー入力の受け付け（表示だけ）、**床・樽の上に立つ判定、足場が無くなったときの通常落下（床か樽の上で止まる）、樽に横から通れない衝突**。
+- **まだ無いこと**: 梯子、画面端ループ、ハンマーの攻撃判定、異常落下、敵、鉄柱・爆弾・扉の挙動、樽が落ちてくる動き、ゲーム進行、エディタ。プレイヤーは**樽以外（壁・鉄柱・扉・爆弾・梯子）は横にすり抜ける**（樽だけが横の障害物。他は未決、§11）。
+- **次にやること**: 「進捗」のステップ5（梯子の昇降）。先に、実機でステップ3の操作感と、ステップ4の落下の速さ（§9 `PLAYER_FALL_SPEED`、暫定）を確認して調整する。
 - **動かし方**: フォルダを展開し `index.html` をブラウザで直接開く（ダブルクリック。サーバー不要）。
-- **自動テスト**: `node tests/run.js`（ロジック）と `node tests/smoke.js`（偽DOMでの起動・操作）。どちらも全件通る状態を保つ。
+- **自動テスト**: `node tests/run.js`（ロジック。46件）と `node tests/smoke.js`（偽DOMでの起動・操作）。どちらも全件通る状態を保つ。
 - **操作**: 左右 = ←→ / A D / 擬似スティック。上下 = ↑↓ / W S（梯子で使う予定）。ハンマー = Space / Z / J / ハンマーボタン。グリッド線 = G。
 
 ## 1. 作業ルール（AI への指示）
@@ -104,7 +104,11 @@
 | ゲームループ | **固定タイムステップ 60Hz**。ロジック(update)と描画(render)を分離。入力は1tickに1回 poll |
 | 入力 | キーボード/タッチ/マウスを `RK.Input` の同じスナップショットにまとめる。ゲーム側はデバイスを意識しない |
 | 見た目 | ファミコン風の大きいドット。ドット絵は動作が固まってから差し替え（現状は仮の箱） |
-| 梯子の乗り降り | 梯子中心から ±4px 前後で乗れる想定（**ステップ5で確定**）。乗ったら中心へスナップ |
+| 梯子の乗り降り | 梯子中心から ±4px 前後で乗れる想定（**ステップ5で確定**）。乗ったら中心へスナップ。穴の上に来たときの落下との優先順位もステップ5で決める（§11） |
+| **立てる条件（足の幅）** | 体の幅12ドットのうち**1ドットでも足場（床の面・樽の上面）に重なっていれば立てる**。体が占める横のドットは `x - w/2` 〜 `x + w/2 - 1`（右端を含まない）。結果、16ドット幅の穴は、中心がセル中心の ±2ドット以内に入るまで落ちない |
+| **樽の上面** | 樽セル(c,r)の上面 `y = r * CELL_H` が足場。同じ高さに「上のセルの下端の床面」もあり、どちらでも立てる |
+| **横にぶつかる物** | **樽だけ**（確定）。壁・鉄柱・扉・爆弾・梯子はいまは通れる（他は後で決める。§11） |
+| 通常落下 | `mode: 'fall'`。足場が無くなったら移動後に開始し、次のtickから `PLAYER_FALL_SPEED` ドット/tick で下へ。足場（床か樽の上）を通り抜けず、そこで止まって `'ground'` に戻る。1tickで複数の足場面をまたぐ速さでも通り抜けない |
 | ファイル構成 | 役割別フォルダ。ES Modules は使わず、名前空間 `RK` + 通常の `<script>` |
 
 ### ES Modules を使わない理由
@@ -128,8 +132,10 @@
       touch.js          擬似スティック + ハンマーボタン（Pointer Events。タッチもマウスも）
       loop.js           固定タイムステップのループ（createStepper は DOM 非依存）
       game.js           状態の入れ物 + 1tick の進め方（Stage作成・アクター生成・update）
+    physics/
+      terrain.js        足場判定 isSupported / 落下 fallTo / 樽の横衝突 blockedX（状態を持たない。Stage を読むだけ）
     entities/
-      player.js         プレイヤーの状態と update（左右移動・ハンマー入力）
+      player.js         プレイヤーの状態と update（左右移動・通常落下・ハンマー入力）
     stage/
       symbols.js        記号表（データのみ）
       stage.js          { floor, objects } -> Stage。検証つき。hasFloor / surfaceY / colAt など
@@ -145,7 +151,7 @@
 ```
 ### 今後追加する予定の場所（目安）
 ```
-js/physics/    足場判定、梯子判定、通常落下/異常落下、衝突
+js/physics/    （terrain.js は作成済み）梯子判定、異常落下、壁などとの衝突を足していく
 js/entities/   enemy 共通、chaser.js / runner.js / foreman.js
 js/ai/         敵の判断（次の移動方向を返すだけ）。移動は physics/entities 側
 js/objects/    壁(耐久値)、梯子破壊、樽、鉄柱、爆弾、扉、火の玉
@@ -164,6 +170,7 @@ js/audio/      サウンド
 - キャラの座標は **`x` = 体の中心、`y` = 足**。足場面の真上に立つとき `y = stage.surfaceY(row)`（= セルの下端）。
   体の矩形は 左 `x - w/2`、上 `y - h`、右 `x + w/2`、下 `y`。`w` は偶数にする（中心xを整数に保つため）。
 - いるセル: `col = stage.colAt(x)`、`row = stage.rowAtFeet(y)`。足がちょうど足場面にあるとき、その足場面の「上のセル」の行を返す（y=216 → row 8）。
+- 体が占めるドット: 横 `x - w/2` 〜 `x + w/2 - 1`、縦 `y - h` 〜 `y - 1`（足 y のドットは含まない。足場面は線なので）。
 - 例: スポーン `P` が (col 1, row 8) → `x = 24, y = 216`。
 
 ### 6.2 データ構造
@@ -183,7 +190,7 @@ symbol id: `empty floor wall_a wall_b wall_c ladder ladder_solid barrel pillar b
 ```
 { id:'player', x, y, w, h,          // 中心x・足y・当たり幅/高さ
   facing: -1|1,                     // 向き（ハンマーの方向）
-  mode: 'ground',                   // 将来 'ladder' | 'fall' | 'abnormal_fall'
+  mode: 'ground' | 'fall',          // 'fall' = 通常落下。将来 'ladder' | 'abnormal_fall'（別状態）
   stepDir, stepTick,                // チョン移動の内部状態
   hammerFrames }                    // 仮: ハンマー表示の残りtick
 ```
@@ -200,13 +207,14 @@ symbol id: `empty floor wall_a wall_b wall_c ladder ladder_solid barrel pillar b
 ### 6.3 各ファイルの公開API
 | 名前 | 中身 |
 |---|---|
-| `RK.CONFIG` | 凍結オブジェクト。`CELL_W CELL_H COLS ROWS WIDTH HEIGHT BG_COLOR FLOOR_DRAW_H TICK_HZ PLAYER_* HAMMER_FRAMES`（§9） |
+| `RK.CONFIG` | 凍結オブジェクト。`CELL_W CELL_H COLS ROWS WIDTH HEIGHT BG_COLOR FLOOR_DRAW_H TICK_HZ PLAYER_* HAMMER_FRAMES`（`PLAYER_FALL_SPEED` を含む。§9） |
 | `RK.Symbols` | `{ LAYER, defs, byChar, byId }`。`LAYER = { NONE, FLOOR, OBJECT, ACTOR }` |
 | `RK.Stage` | `{ Stage, parse(name, data) }`。Stage のメソッド: `inBounds(c,r)` `wrapCol(c)`（左右ループ。梯子探索には使わない）`idAt(c,r)` `hasFloor(c,r)` `surfaceY(r)` `colAt(x)` `rowAtFeet(y)` `centerX(c)` `setId` `setFloor` `toData()`（記号文字列に書き戻す。エディタ保存用） |
 | `RK.Input` | `create()` → `{ set(source, name, down), releaseAll(source), poll() }`（source = `'key'`/`'touch'`、name = `left right up down hammer`）。`attachKeyboard(input, window)`。`KEYMAP`。`NAMES` |
 | `RK.Touch` | `attach(input, { stick, knob, hammer })`（DOM要素を渡す） |
 | `RK.Loop` | `createStepper(update)` → `{ advance(dtMs) }`（実行tick数を返す）。`start(update, render)`。`STEP_MS MAX_DT MAX_STEPS` |
-| `RK.Player` | `create(stage, spawn)` / `update(p, input, stage)` / `moveX(p, d)` |
+| `RK.Player` | `create(stage, spawn)` / `update(p, input, stage)` / `moveX(p, d, stage?)`（1ドットずつ。画面内クランプ + stage があれば樽で止まる） |
+| `RK.Physics` | `isSupported(stage, x, y, bw)`（足を y に置いた体が足場に乗っているか。y が H の倍数でなければ false。画面下端 y=HEIGHT は常に true=暫定）/ `fallTo(stage, x, bw, y, dist)` → `{ y, landed }` / `blockedX(stage, nx, y, bw, bh, dir)`（1ドットの一歩が樽の列に新しく入るか。すでに樽の中なら通す） |
 | `RK.Game` | `create(stageData)` / `update(game, input)` |
 | `RK.Screen` | `init(canvas)` `fit()` `ctx` `scale` |
 | `RK.Sprites` | `register(id, fn(ctx,x,y,w,h))` `draw(ctx,id,x,y,w,h)` `drawActor(ctx, actor)` `drawers`。ドット絵は `register` で上書き |
@@ -214,7 +222,7 @@ symbol id: `empty floor wall_a wall_b wall_c ladder ladder_solid barrel pillar b
 | デバッグ | コンソールから `RK.game` `RK.stage` `RK.input` が見える |
 
 ### 6.4 読み込み順（index.html。依存順）
-`config → stage/symbols → stage/stage → data/stages/stage01 → core/input → core/touch → core/loop → entities/player → core/game → render/screen → render/sprites → render/renderer → main`
+`config → stage/symbols → stage/stage → data/stages/stage01 → core/input → core/touch → core/loop → physics/terrain → entities/player → core/game → render/screen → render/sprites → render/renderer → main`
 新しいファイルは依存するものより後ろに `<script>` を足す。**tests/smoke.js は index.html の順番通りに読み込む**ので、足し忘れや順番ミスを検出できる。
 
 ### 6.5 DOM の ID（index.html ↔ main.js）
@@ -222,7 +230,7 @@ symbol id: `empty floor wall_a wall_b wall_c ladder ladder_solid barrel pillar b
 
 ### 6.6 1フレームの流れ
 ```
-入力デバイス → RK.Input.set → (Loop が 1/60秒刻みで) Game.update(game, input.poll()) → Player.update …
+入力デバイス → RK.Input.set → (Loop が 1/60秒刻みで) Game.update(game, input.poll()) → Player.update（足場確認 → 'fall' なら落下 / 'ground' なら左右移動 → 足場から外れたら落下開始）…
 ブラウザのフレームごと → Renderer.drawStage(ctx, stage, game.actors)
 ```
 Renderer の描画順: 物 → アクター → 床（床の帯がキャラの足元4ドットに重なる）→ グリッド線。
@@ -265,6 +273,7 @@ Renderer の描画順: 物 → アクター → 床（床の帯がキャラの�
 | `PLAYER_SPEED` | 1 | 押し続け時の速さ（ドット/tick）= 60ドット/秒。1セル(16ドット)を約0.27秒、画面を横切るのに約4.3秒 |
 | `PLAYER_TAP_DOTS` | 3 | 「チョン」で進むドット数 |
 | `PLAYER_TAP_FRAMES` | 6 | チョンにかけるtick数（約0.1秒）。この間押し続けていたら、その後は連続移動 |
+| `PLAYER_FALL_SPEED` | 2 | **暫定**。通常落下の速さ（ドット/tick。整数・加速なし）= 120ドット/秒。1セル(24ドット)を12tick（0.2秒）、1段(2セル)を24tick。仕様に値が無いので実機で調整 |
 | `HAMMER_FRAMES` | 12 | ハンマー表示のtick数（仮。ステップ7で置き換え） |
 
 - チョンの意味: 押した瞬間に確定し、途中で離しても最後まで進む。短いタップは毎回ちょうど `TAP_DOTS` ドット。押し続けると `TAP_FRAMES` 経過後に連続移動へ滑らかにつながる（止まらない）。
@@ -278,8 +287,9 @@ Renderer の描画順: 物 → アクター → 床（床の帯がキャラの�
 - [x] 2. ステージ文字列 -> データ変換、仮図形で表示、検証（床は厚み0の別レイヤーに修正済み）
 - [x] 3. プレイヤー（仮の箱）の左右移動。チョン押し + 連続。ゲームループ(60Hz)、入力統一、擬似スティック、ハンマーボタン
   - 自動テスト（`tests/run.js` 24件 + `tests/smoke.js` 17件）は通過。**実ブラウザ・実機のタッチ操作感は未確認。確認後に §9 の値を調整する。**
-- [ ] 3b. 横方向の衝突（現状はすり抜ける）。**樽は横から通れない**（確定）。壁・鉄柱・扉・爆弾はどうなるかが未決（§11）。ステップ4と一緒に進めるのが自然
-- [ ] 4. 床判定と通常落下
+- [x] 3b. 横方向の衝突。**樽だけ**横から通れない（確定）。壁・鉄柱・扉・爆弾・梯子は通れる（他は後で決める。§11）。樽の当たりはセル全体（暫定）
+- [x] 4. 床判定と通常落下。1ドットでも足場に乗っていれば立てる（確定）。床か樽の上で止まる。落下の速さ・落下中の左右入力無視・画面下端の足場扱いは**暫定**（§9 / §11）
+  - 自動テスト `tests/run.js` 46件通過（地形・通常落下・樽の横衝突を追加）。**実機での落下の見た目・速さは未確認。**
 - [ ] 5. 梯子の昇降（許容幅・スナップ。スティック上下 = `dy` を使う）
 - [ ] 6. 画面端の左右ループ（`Player.moveX` の画面内クランプを置き換える。描画の見え方も決める）
 - [ ] 7. ハンマーと壁の破壊（耐久値）。仮のハンマー表示を置き換える
@@ -295,22 +305,28 @@ Renderer の描画順: 物 → アクター → 床（床の帯がキャラの�
 1. **物レイヤーの重ね**: 壁と鉄柱の組み合わせなど。必要になった時点で、物レイヤーを複数に分けるか判断。
 2. **床の描画順**: 現状は 物 -> アクター -> 床。ドット絵に移るとき見直す。
 3. **操作感の最終値**: §9 は暫定。実機で触って決める。「チョン」の距離・速度・スティックの不感帯。
-4. **穴の上を歩くとき**: 床の穴（梯子の上端）の上でキャラの足が何ドットかかったら落ちる/乗れるか。ステップ4〜5で決める。足の幅（`PLAYER_W`=12）のうち何ドットが床の上にあれば立てるか、も同じ話。
-5. **横方向の衝突（3b）**: 壁（W/w/V）・鉄柱・扉・爆弾を横に通れるか。仕様は「壁の種類によっては移動に影響」とだけあり、どの壁が通れるかは未記載。ユーザーに確認が必要。
+4. ~~穴の上を歩くとき~~ → **確定済み**（§4「立てる条件」: 1ドットでも乗っていれば立てる）。ただしステップ5で、梯子の穴の上に来たときの「梯子を降りる」と「落ちる」の優先順位を決める。穴の上で落ちるのは中心がセル中心の ±2ドット以内、梯子に乗れる範囲は ±4ドット想定で、梯子の方が広い。
+5. **横方向の衝突（残り）**: **樽は確定済み**。壁（W/w/V）・鉄柱・扉・爆弾を横に通れるか。仕様は「壁の種類によっては移動に影響」とだけあり、どの壁が通れるかは未記載。ユーザーに確認が必要（ステップ7・9で必要になる）。
 6. **ハンマー中の移動**: 振っている間に歩けるか。ステップ7で決める。
 7. **スティックの形**: いまは左下固定の4方向。浮動スティック（触った位置に出る）や8方向にするか、ボタンを増やすか。
 8. **画面端ループの見え方**: 体が半分はみ出したときの描画と、何を基準に反対側へ移すか（中心？）。ステップ6で決める。
 9. **仕様書は「グリッド単位の移動」、確定設計は「整数ドット連続 + 判断はセル単位」**。敵の移動（梯子の乗り降り、扉の出入り）をドット連続でどう扱うかは、敵を作るとき（ステップ8）に整理する。
+10. **通常落下中の左右入力**（暫定: 無視する）。落下中に横へ動けるか。仕様は「足場がなくなると発生。床か樽の上で止まる」のみ。選択肢: A 無視する（暫定） / B 落下中も横に動ける。落下中の入力は着地後には引き継がれない（押し続けていれば着地後に連続移動で歩き出す）。
+11. **通常落下の速さ**（暫定: 2ドット/tick・加速なし）。実機で調整。
+12. **通常落下中のハンマー**（暫定: 表示だけ受け付ける。いまは仮のため）。仕様は異常落下中だけ不可と明記。ステップ7で決める。
+13. **画面下端の足場**（暫定: y=216 は常に足場）。床の無いステージで無限に落ちないための安全策。床の無い最下段をどう扱うか（落ちたらミス等）は仕様に無い。
+14. **樽の当たりの形**（暫定: セル全体 16 x 24）。上面 = セル上端、横 = セルの左右端。「1セルに収まるサイズ」のみ確定で、樽の見た目の大きさとは別。
 
 ## 12. 既知の制限（バグではなく未実装）
-- 壁・樽・鉄柱・扉・爆弾・梯子をすり抜ける。床の判定も無い（y は動かない）。
+- 壁・鉄柱・扉・爆弾・梯子は横にすり抜ける（樽は通れない）。梯子の昇降は未実装（梯子セルの穴からは落ちる）。
+- 樽が落ちてくる・鉄柱が壊れて樽が落ちる動きは未実装（樽は固定の障害物・足場）。
 - 左右の画面端は止まる（ループは未実装）。
 - タッチUIは画面下に固定表示。画面が低い端末では盤面の下端に重なることがある（半透明）。
 - 擬似スティックとマウス操作は偽DOMでしか検証していない。実機のマルチタッチ・iOS Safari の挙動は未確認。
 
 ## 13. テスト方法
 - ブラウザで `index.html` を開く。Gキーでセルのグリッド線表示。ステータス行に自キャラの座標とセルが出る。
-- `node tests/run.js` — Node の `vm` で `config / stage / input / loop / player / game` を読み込み、画面なしでルールを確認（ステージ検証・往復一致・チョン/連続移動・ラッチ・ハンマー・決定性・ループの刻み）。
+- `node tests/run.js` — Node の `vm` で `config / stage / input / loop / physics(terrain) / player / game` を読み込み、画面なしでルールを確認（ステージ検証・往復一致・チョン/連続移動・ラッチ・ハンマー・足場・通常落下・樽の横衝突・決定性・ループの刻み）。地形のテストは `mkStage()` で小さなステージを作って行い、stage01 の配置に依存しない。
 - `node tests/smoke.js` — 偽DOM上で index.html の `<script>` 順に読み込み、キー/擬似スティック/ハンマーボタンの操作を流す。読み込み順・ID の食い違いも検出。
 - どちらも標準の Node だけで動く（追加パッケージ不要）。新しいルールを足したら `tests/run.js` にテストを足す。DOM に触るコードを足したら `tests/smoke.js` の偽DOMで足りるか確認する。
 
@@ -325,3 +341,4 @@ Renderer の描画順: 物 → アクター → 床（床の帯がキャラの�
 - 修正: 床を「セルを占有する行」から「セル下端の厚み0の面」に変更。ステージデータを `floor` / `objects` の2レイヤー化。床は見た目だけ下端4ドットの帯で描画。`Stage.toRows()` は `toData()` に変更。
 - 修正: セルを 16x32 -> 16x24（横2:縦3）、画面を 256x216（16列x9行）に変更。stage01 を9行に作り直し（行0,1はHUD用の空き）。
 - ステップ3: 固定60Hzループ（`core/loop.js`）、入力の統一（`core/input.js`。ラッチで短いタップも拾う）、擬似スティック + ハンマーボタン（`core/touch.js`、`index.html`/`style.css` にタッチUI）、プレイヤー（`entities/player.js`。チョン押し + 連続移動、ハンマー入力は表示のみ）、`core/game.js`。`Stage` に `colAt / rowAtFeet / centerX` を追加。`Renderer.drawStage` は `actors` を受け取る形に拡張（省略時は従来どおり spawns を描く）。`Sprites.drawActor` を追加。`main.js` は配線のみに。`config.js` にプレイヤー・ループの定数を追加。`tests/run.js` と `tests/smoke.js` を追加。context.md を、ルール要約・用語・API早見表・暫定値・既知の制限を含む形に再構成（新規チャットでこれ1つで続けられるように）。
+- ステップ3b + 4: `js/physics/terrain.js` を追加（`isSupported` / `fallTo` / `blockedX`）。`Player` に通常落下（`mode:'fall'`）と樽の横衝突を追加し、`moveX(p, d, stage?)` は1ドットずつ確かめる形に変更。`config.js` に `PLAYER_FALL_SPEED`（暫定2）。`index.html` に terrain.js の `<script>` を追加（loop の後・player の前）。確定: 横にぶつかるのは樽だけ、1ドットでも足場に乗っていれば立てる。`tests/run.js` に22件追加（計46件）し、足場・落下・樽のテストは `mkStage()` の小さなステージで行う形にした。「画面端で止まる」「歩いても y は動かない」の2件は stage01 の配置に依存しないよう平らなステージに切り替え。テスト内の文字化けも修正。`game.js` / `stage.js` は変更なし。
