@@ -6,6 +6,7 @@
  *  - floor   : '=' はそのセルの「下端」にある厚み0の足場面。セルは占有しない。
  *              足場面の y 座標 = (row + 1) * CELL_H。キャラの足はここに乗る。
  *  - objects : 壁・梯子・樽など（1セル1つ）とアクターのスポーン位置。
+ *              耐久値(hp)を持つオブジェクトは hp[row][col] で残り耐久値を管理する。
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
@@ -19,6 +20,7 @@
       this.rows = rows;
       this.floors = [];  // floors[row][col] = 'floor' | 'empty'
       this.cells = [];   // cells[row][col] = 物の symbol id（アクターは 'empty'）
+      this.hp = [];      // hp[row][col] = 残り耐久値（0 = 耐久値なし/破壊済み）
       this.spawns = [];  // { id, col, row }
       this.errors = [];  // 文字列。空なら正常
     }
@@ -35,6 +37,17 @@
     /** 物レイヤー。範囲外は 'empty'。col を wrap するかは呼び出し側が決める */
     idAt(col, row) {
       return this.inBounds(col, row) ? this.cells[row][col] : 'empty';
+    }
+
+    /** セルの残り耐久値（範囲外や耐久値のない物は 0） */
+    hpAt(col, row) {
+      return this.inBounds(col, row) ? this.hp[row][col] : 0;
+    }
+
+    /** セルにあるオブジェクトの初期（最大）耐久値（なければ 0） */
+    maxHpAt(col, row) {
+      const def = byId[this.idAt(col, row)];
+      return (def && def.hp) || 0;
     }
 
     /** そのセルの下端に足場面があるか（範囲外は false） */
@@ -63,11 +76,28 @@
     }
 
     setId(col, row, id) {
-      if (this.inBounds(col, row)) this.cells[row][col] = id;
+      if (!this.inBounds(col, row)) return;
+      this.cells[row][col] = id;
+      const def = byId[id];
+      this.hp[row][col] = (def && def.hp) || 0;
     }
 
     setFloor(col, row, on) {
       if (this.inBounds(col, row)) this.floors[row][col] = on ? 'floor' : 'empty';
+    }
+
+    /** 耐久値を持つセルにダメージを与える。0以下になったら 'empty' に破壊する */
+    damageCell(col, row, amount) {
+      if (!this.inBounds(col, row)) return { hit: false, destroyed: false, hp: 0 };
+      const cur = this.hp[row][col];
+      if (cur <= 0) return { hit: false, destroyed: false, hp: 0 };
+      const next = Math.max(0, cur - (amount || 1));
+      if (next === 0) {
+        this.setId(col, row, 'empty');
+        return { hit: true, destroyed: true, hp: 0 };
+      }
+      this.hp[row][col] = next;
+      return { hit: true, destroyed: false, hp: next };
     }
 
     /** 記号文字列に書き戻す（エディタ保存用） */
@@ -103,6 +133,7 @@
     for (let r = 0; r < ROWS; r++) {
       stage.floors.push(new Array(COLS).fill('empty'));
       stage.cells.push(new Array(COLS).fill('empty'));
+      stage.hp.push(new Array(COLS).fill(0));
     }
 
     scan(stage, '床レイヤー', data.floor || [], (def, c, r) => {
@@ -113,7 +144,7 @@
     scan(stage, '物レイヤー', data.objects || [], (def, c, r) => {
       if (def.layer === LAYER.FLOOR) stage.errors.push(`物レイヤー ${r + 1}行${c + 1}列: 床 '=' は床レイヤーに書いてください`);
       else if (def.layer === LAYER.ACTOR) stage.spawns.push({ id: def.id, col: c, row: r });
-      else stage.cells[r][c] = def.id;
+      else stage.setId(c, r, def.id);
     });
 
     const players = stage.spawns.filter((s) => s.id === 'player').length;
