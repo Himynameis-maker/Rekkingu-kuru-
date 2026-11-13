@@ -18,7 +18,9 @@
       for (let r = 0; r < stage.rows; r++) {
         for (let c = 0; c < stage.cols; c++) {
           const id = stage.cells[r][c];
-          if (id !== 'empty') RK.Sprites.draw(ctx, id, c * CELL_W, r * CELL_H, CELL_W, CELL_H);
+          if (id !== 'empty') {
+            RK.Sprites.draw(ctx, id, c * CELL_W, r * CELL_H, CELL_W, CELL_H, stage.hpAt(c, r), stage.maxHpAt(c, r));
+          }
         }
       }
       if (actors) {
