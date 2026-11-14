@@ -38,7 +38,7 @@ const FLAT = mkStage({ 8: FULL }, { 8: '.P..............' });
 
 /** テスト用ハーネス。1tick = 入力イベントを流して poll して Game.update */
 function setup(stageData) {
-  const game = RK.Game.create(stageData || RK.StageData.stage01);
+  const game = RK.Game.create(stageData || FLAT);
   const input = RK.Input.create();
   return {
     game, input, p: game.player,
@@ -70,7 +70,7 @@ test('colAt / rowAtFeet / centerX / surfaceY', () => {
 
 console.log('Player: 出現');
 test('P のスポーン位置の中心・足場面に立つ', () => {
-  const t = setup();
+  const t = setup(FLAT);
   eq(t.p.x, 24, 'x'); eq(t.p.y, 216, 'y');
   eq(t.game.stage.colAt(t.p.x), 1, 'col'); eq(t.game.stage.rowAtFeet(t.p.y), 8, 'row');
 });
@@ -460,7 +460,7 @@ test('AIが梯子方向(dirY=-1)を返すと梯子モードに入り、床の高
     RK.Enemy.registerAI('foreman', null);
   }
 });
-test('通常落下着地時、敵はスタンせず即座に歩行を再開する（通常敵は速度段階のみ上昇）', () => {
+test('通常落下着地時、敵はスタンも速度段階上昇もしない（異常落下のみで速度段階が上がる）', () => {
   const t = setup(mkStage(
     { 6: '===.===.........', 8: FULL },
     { 6: '.1..3...........', 8: 'P...............' }
@@ -471,11 +471,11 @@ test('通常落下着地時、敵はスタンせず即座に歩行を再開す�
   eq(chaser.y, 216, 'chaser着地');
   eq(foreman.y, 216, 'foreman着地');
   eq(chaser.stunFrames, 0, '通常落下ではchaserもスタンしない');
-  eq(chaser.speedBoost, 1, 'chaserは落下経験でspeedBoost上昇');
+  eq(chaser.speedBoost, 0, '通常落下ではchaserも速度段階は上がらない');
   eq(foreman.stunFrames, 0, 'foremanもスタンしない');
-  eq(foreman.speedBoost, 0, 'foremanはspeedBoost対象外');
+  eq(foreman.speedBoost, 0, 'foremanもspeedBoost=0');
 });
-test('敵の異常落下: 途中の床をすり抜け一番下の床まで落下（落下中は無敵、着地で即無敵解除＆通常敵のみスタン）', () => {
+test('敵の異常落下: 途中の床をすり抜け一番下の床まで落下（落下中は無敵、着地で即無敵解除＆通常敵のみスタン＆速度段階上昇）', () => {
   const t = setup(mkStage(
     { 4: FULL, 6: FULL, 8: FULL },
     { 4: '..1.............', 8: 'P...............' }
@@ -489,6 +489,25 @@ test('敵の異常落下: 途中の床をすり抜け一番下の床まで落下
   eq(e.mode, 'ground', 'ground復帰');
   eq(e.invincible, false, '着地と同時に無敵解除');
   eq(e.stunFrames > 0, true, '異常落下では着地後スタン');
+  eq(e.speedBoost, 1, '異常落下では速度段階が上がる');
+});
+test('異常落下経験による速度段階上昇は最大2段階まで（親方は上昇しない）', () => {
+  const t = setup(mkStage(
+    { 2: FULL, 8: FULL },
+    { 2: '.1.3............', 8: 'P...............' }
+  ));
+  const chaser = t.game.enemies[0];
+  const foreman = t.game.enemies[1];
+
+  for (let n = 1; n <= 3; n++) {
+    chaser.y = 72;
+    RK.Enemy.startAbnormalFall(chaser);
+    foreman.y = 72;
+    RK.Enemy.startAbnormalFall(foreman);
+    t.tick(150);
+    eq(chaser.speedBoost, Math.min(2, n), n + '回目異常落下後のchaser speedBoost');
+    eq(foreman.speedBoost, 0, n + '回目異常落下後のforeman speedBoost');
+  }
 });
 
 console.log('Chaser & Fast Chaser AI（ステップ8b-2）');
@@ -532,7 +551,7 @@ test('§4-1 / §2-3: 異なる高さで梯子のマスに到達すると登っ�
 });
 test('§4-2 / §2-3: プレイヤーが下にいる場合、梯子の直上のマスから降りて追う（1段下接続も有効）', () => {
   const t = setup(mkStage(
-    { 4: FULL, 6: '===.============', 8: FULL },
+    { 4: FULL, 6: '=.==============', 8: FULL },
     { 4: '..........P.....', 7: '.....L..........', 8: '.....L..........' }
   ));
   t.p.x = 168; t.p.y = 216;
@@ -595,7 +614,7 @@ test('§6 / 不変条件9: 移動できない場合は反転し、反対方向�
 test('§7 / 不変条件10: 梯子付近で方向選択が循環する場合は停止し、再判定フラグを設定する', () => {
   const t = setup(mkStage(
     { 6: FULL, 8: FULL },
-    { 6: '..........P.....', 7: '...O.O..........', 8: '...OLO....P.....' }
+    { 6: '..........P.....', 7: '...O.O..........', 8: '...OLO..........' }
   ));
   const stage = t.game.stage;
   stage.setId(3, 8, 'barrel');
@@ -611,7 +630,8 @@ test('§8: 通常落下後に着地すると追跡方針を再判定し、プレ
     { 6: '.1..............', 8: '..........P.....' }
   ));
   const e = t.game.enemies[0];
-  t.tick(140);
+  // 左端をループして col3 の穴から落下し y=216 に着地するまで十分な tick を進める
+  t.tick(320);
   eq(e.y, 216, '着地');
   eq(e.dirX, 1, '着地後にプレイヤー方向(右)へ向き変更');
 });
@@ -652,17 +672,17 @@ test('行き止まり梯子も登り、てっぺんの行き止まりに着い�
     { 6: '..........P.....', 7: '....L...........', 8: '.1..L...........' }
   ));
   const e = t.game.enemies[0];
-  // col1(x=24) → col4(x=72) まで48ドット(60tick)歩き、行き止まり梯子を登り始める
+  // col1(x=24) → col4(x=72) まで48ドット(60tick)歩き、2セル分の行き止まり梯子を登り始める
   t.tick(60 + 10);
   eq(e.mode, 'ladder', '行き止まり梯子を登り始める');
   eq(e.dirY, -1, '上へ昇っている');
-  // 残り14tickで y=192(行き止まりてっぺん) に到達し、1段降り(dirY=1)へ切り替わる
-  t.tick(14);
-  eq(e.y, 192, 'てっぺん y=192 に到達');
+  // 残り38tick（計48tick）で y=168(行き止まりてっぺん) に到達し、1段降り(dirY=1)へ切り替わる
+  t.tick(38);
+  eq(e.y, 168, 'てっぺん y=168 に到達');
   eq(e.mode, 'ladder', '梯子のまま');
   eq(e.dirY, 1, '行き止まりに着いたので1段降りる');
-  // さらに24tickで y=216 に降りた後、通常アルゴリズムに戻って再び上へ登り直す
-  t.tick(24);
+  // さらに48tickで y=216 に降りた後、通常アルゴリズムに戻って再び上へ登り直す
+  t.tick(48);
   eq(e.y, 216, '1段降りて y=216 に戻る');
   eq(e.dirY, -1, '通常アルゴリズムに戻り再び登り始める');
 });
@@ -684,10 +704,11 @@ test('§1, §2 / 不変条件1,2,3,4: プレイヤーを追跡せず、初期左
 test('§5-1 / 不変条件5: 初回の上下移動（vertical=null）では上下両方に梯子があっても下方向を優先する', () => {
   const t = setup(mkStage(
     { 4: FULL, 6: FULL, 8: FULL },
-    { 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: 'P.2.L...........' }
+    { 5: '....L...........', 6: '.2..L...........', 7: '....L...........', 8: 'P...L...........' }
   ));
   const e = t.game.enemies[0];
-  t.tick(36);
+  // col1(x=24) → col4(x=72) まで48ドット（0.9ドット/tickで54tick）
+  t.tick(54);
   eq(e.x, 72, '梯子列 col4 に到達');
   eq(e.mode, 'ladder', '梯子モードへ移行');
   eq(e.dirY, 1, '上下両方ある場合、初回は下方向(1)を優先');
@@ -697,13 +718,15 @@ test('§5-1 / 不変条件5: 初回の上下移動（vertical=null）では上�
 test('§5-2, §5-4 / 不変条件6,7,8: 一度決まった vertical を優先し、行けなければ反対方向へ切り替えて記録を更新する', () => {
   const t = setup(mkStage(
     { 4: FULL, 6: FULL, 8: FULL },
-    { 5: '......L.........', 6: '......L.........', 7: '....L...........', 8: 'P.2.L...........' }
+    { 4: '.2..............', 5: '....L...........', 6: '....L...........', 8: 'P...............' }
   ));
   const e = t.game.enemies[0];
-  t.tick(36 + 48 + 5);
-  eq(e.y, 216, '一番下の床 y=216 に到達');
+  // 上段 col1(x=24) → col4(x=72) で下り梯子に乗り vertical=1 記録、中段 y=168 に着地
+  t.tick(54 + 48 + 5);
+  eq(e.y, 168, '中段 y=168 に到達');
   eq(e.mode, 'ground', '一度横移動を挟む');
-  t.tick(60);
+  // 1周回って再び col4 に戻ったとき、下が無い梯子なので上方向(-1)へ切り替わり記録更新
+  t.tick(290);
   eq(e.runnerVertical, -1, '下が無い梯子で上方向(-1)へ切り替わり記録が更新される');
 });
 test('§4, §7 / 不変条件9,10: 縦移動直後は horizontalNext=true により、梯子が続いていても横移動を優先する', () => {
@@ -733,17 +756,17 @@ test('行き止まり梯子も登り、てっぺんの行き止まりに着い�
     { 7: '....L...........', 8: 'P.2.L...........' }
   ));
   const e = t.game.enemies[0];
-  // col2(x=40) → col4(x=72) まで36tick歩き、行き止まり梯子を登り始める
+  // col2(x=40) → col4(x=72) まで36tick歩き、2セル分の行き止まり梯子を登り始める
   t.tick(36 + 10);
   eq(e.mode, 'ladder', '行き止まり梯子を登り始める');
   eq(e.dirY, -1, '上へ昇っている');
-  // 残り14tickで y=192(行き止まりてっぺん) に到達し、1段下がり(dirY=1)＆下向き傾向(runnerVertical=1)になる
-  t.tick(14);
-  eq(e.y, 192, 'てっぺん y=192 に到達');
+  // 残り38tick（計48tick）で y=168(行き止まりてっぺん) に到達し、1段下がり(dirY=1)＆下向き傾向(runnerVertical=1)になる
+  t.tick(38);
+  eq(e.y, 168, 'てっぺん y=168 に到達');
   eq(e.dirY, 1, '1段下がる');
   eq(e.runnerVertical, 1, '下向きの傾向がついている');
-  // さらに24tickで y=216 に降りた後、通常アルゴリズム（horizontalNext）により横へ歩き出す
-  t.tick(24 + 5);
+  // さらに48tickで y=216 に降りた後、通常アルゴリズム（horizontalNext）により横へ歩き出す
+  t.tick(48 + 5);
   eq(e.y, 216, '下の床 y=216 に戻る');
   eq(e.mode, 'ground', '横移動優先で床へ降りる');
   eq(e.x > 72, true, '右へ歩き出している x=' + e.x);
@@ -768,7 +791,7 @@ const BARREL_TOP = mkStage({ 8: FULL }, { 7: '....P...........', 8: '....O......
 const BARREL_DROP = mkStage({ 8: FULL }, { 6: '....P...........', 8: '....O...........' });
 
 test('stage01 のスポーン位置は足場の上', () => {
-  const t = setup(); eq(RK.Physics.isSupported(t.game.stage, t.p.x, t.p.y, t.p.w), true, 'supported');
+  const t = setup(RK.StageData.stage01); eq(RK.Physics.isSupported(t.game.stage, t.p.x, t.p.y, t.p.w), true, 'supported');
 });
 test('1ドットでも乗っていれば立てる（床の右端）', () => {
   const s = setup(HOLE).game.stage;
@@ -1173,26 +1196,28 @@ test('Stepper: 120Hz 表示(8.33ms)でも 60tick/秒', () => {
   eq(n, 60, 'tick数');
 });
 
-console.log('敵の通常落下(スタンなし)・梯子の床すり抜け(A/B)・Runnerの梯子使用（ステップ8b-3 修正）');
+console.log('敵の通常落下(スタン・加速なし)・梯子の床すり抜け(A/B)・Runnerの梯子使用（ステップ8b-3 修正）');
 const ENEMY_CHAR = { chaser: '1', runner: '2', fast_chaser: '4' };
 Object.keys(ENEMY_CHAR).forEach((id) => {
-  test(id + ': 通常落下の着地でスタンせず、着地後すぐ歩き出す（速度段階だけ上がる）', () => {
+  test(id + ': 通常落下の着地でスタンも加速もせず、着地後すぐ歩き出す', () => {
     const objs = { 6: '..' + ENEMY_CHAR[id] + '.............', 8: '............P...' };
     const t = setup(mkStage({ 6: '==.=============', 8: FULL }, objs));
     const e = t.game.enemies[0];
     holdUntil(t, () => e.mode === 'ground' && e.y === 216, 200);
     eq(e.y, 216, '着地した'); eq(e.mode, 'ground', 'ground');
     eq(e.stunFrames, 0, '通常落下ではスタンしない');
-    eq(e.speedBoost, 1, '速度段階は上がる');
+    eq(e.speedBoost, 0, '通常落下では速度段階は上がらない');
     const x0 = e.x; t.tick(20);
     eq(e.x !== x0, true, '着地後すぐ歩いている x0=' + x0 + ' x=' + e.x);
   });
-  test(id + ': 異常落下の着地ではスタンする（通常落下との区別）', () => {
+  test(id + ': 異常落下の着地ではスタンし、速度段階が上がる（通常落下との区別）', () => {
     const t = setup(mkStage({ 4: FULL, 8: FULL }, { 4: '..' + ENEMY_CHAR[id] + '.............', 8: '............P...' }));
     const e = t.game.enemies[0];
     RK.Enemy.startAbnormalFall(e);
     holdUntil(t, () => e.mode === 'ground', 200);
-    eq(e.y, 216, '一番下の床'); eq(e.stunFrames > 0, true, '異常落下ではスタン');
+    eq(e.y, 216, '一番下の床');
+    eq(e.stunFrames > 0, true, '異常落下ではスタン');
+    eq(e.speedBoost, 1, '異常落下では速度段階が上がる');
   });
 });
 
@@ -1234,6 +1259,33 @@ test('Runner: プレイヤーが同じ高さにいても別の高さにいても
     for (let k = 0; k < 250; k++) { t.tick(); if (e.mode === 'ladder') sawLadder = true; }
     eq(sawLadder, true, 'ケース' + i + ': 梯子を使った');
   });
+});
+test('梯子昇降速度: キャラ別定数（小数値含む）でサブピクセル累積により正確に昇降し、床高さイベントが機能する', () => {
+  const orig = RK.CONFIG;
+  RK.CONFIG = Object.freeze(Object.assign({}, orig, { RUNNER_CLIMB_SPEED: 0.5 }));
+  try {
+    // 同じ vm コンテキスト内の C 参照は起動時のままなので、新規 vm で 0.5 速度を検証する
+    const sb = {}; sb.window = sb; vm.createContext(sb);
+    [
+      'js/config.js', 'js/stage/symbols.js', 'js/stage/stage.js', 'js/data/stages/stage01.js',
+      'js/core/input.js', 'js/core/loop.js', 'js/physics/terrain.js',
+      'js/entities/player.js', 'js/entities/enemy.js', 'js/ai/chaser.js', 'js/ai/runner.js', 'js/core/game.js',
+    ].forEach((f) => {
+      let code = fs.readFileSync(path.join(root, f), 'utf8');
+      if (f === 'js/config.js') code = code.replace('RUNNER_CLIMB_SPEED: 1,', 'RUNNER_CLIMB_SPEED: 0.5,');
+      vm.runInContext(code, sb, { filename: f });
+    });
+    const st = sb.RK.Game.create(floorLadder('P...............', '.2..............'));
+    const inp = sb.RK.Input.create();
+    const e = st.enemies[0];
+    for (let i = 0; i < 400 && !(e.y === 120 && e.mode === 'ground'); i++) {
+      sb.RK.Game.update(st, inp.poll());
+    }
+    eq(e.y, 120, '0.5ドット/tick でも上の床 y=120 に到達して降りる');
+    eq(e.mode, 'ground', 'ground');
+  } finally {
+    RK.CONFIG = orig;
+  }
 });
 test('AIが未登録の実装済み敵種は、コンソールに警告して仮AIで動く（読み込み順の誤りに気づける）', () => {
   const warns = []; sandbox.console = { warn: (m) => warns.push(String(m)) };
