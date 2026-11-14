@@ -504,7 +504,6 @@ test('異常落下経験による速度段階上昇は最大2段階まで（親�
     RK.Enemy.startAbnormalFall(chaser);
     foreman.y = 72;
     RK.Enemy.startAbnormalFall(foreman);
-    // 着地直後（72tick）で親方のスタン時間を確認し、その後スタン終了まで進める
     t.tick(72);
     eq(foreman.stunFrames, C.PLAYER_ABNORMAL_LAND_STUN_FRAMES, n + '回目異常落下着地直後のforemanスタン時間');
     t.tick(80);
@@ -800,10 +799,8 @@ test('Foreman: 4〜6sの定期立ち止まり→0.6〜1.2s停止→動き出す�
   const t = setup(mkStage({ 8: FULL }, { 8: 'P.............3.' }));
   const f = t.game.enemies[0];
   eq(f.dirX, -1, '最初は左のプレイヤーへ向かう');
-  // 立ち止まりまでの時間が 240〜360 tick の範囲内であることを確認
   eq(f.foremanWalkTimer >= C.FOREMAN_WALK_MIN_FRAMES && f.foremanWalkTimer <= C.FOREMAN_WALK_MAX_FRAMES, true, 'walkTimer=' + f.foremanWalkTimer);
 
-  // 定期立ち止まりに入るまで進める
   let enteredPause = false;
   for (let i = 0; i < 400; i++) {
     t.tick(1);
@@ -815,9 +812,8 @@ test('Foreman: 4〜6sの定期立ち止まり→0.6〜1.2s停止→動き出す�
   eq(enteredPause, true, '4〜6s後に定期立ち止まりに入る');
   eq(f.pauseFrames >= C.FOREMAN_PAUSE_MIN_FRAMES && f.pauseFrames <= C.FOREMAN_PAUSE_MAX_FRAMES, true, 'pauseFrames=' + f.pauseFrames);
 
-  // 立ち止まり中は動かず、プレイヤーが反対側へ移動していたら、動き出す瞬間に方向転換する
   const xPaused = f.x;
-  t.p.x = 240; // プレイヤーを右端へ移動
+  t.p.x = 240;
   const wait = f.pauseFrames;
   t.tick(wait);
   eq(f.x, xPaused, '停止中は動かない');
@@ -828,11 +824,9 @@ test('Foreman: 4〜6sの定期立ち止まり→0.6〜1.2s停止→動き出す�
 test('Foreman: プレイヤー位置＋壁の場所で0.3〜0.8s立ち止まり→振り下ろし→1.0s後に再振り→離脱で方向転換', () => {
   const t = setup(mkStage({ 8: FULL }, { 8: '.3..V.......P...' }));
   const f = t.game.enemies[0];
-  // プレイヤーと親方を col4 の壁V(耐久3) の位置へ配置
   t.p.x = 72; t.p.y = 216;
   f.x = 68; f.y = 216; f.dirX = 1; f.foremanWalkTimer = 350;
 
-  // 数tick進めて接近チェックを踏み、spot_pause に入るのを確認
   let spotted = false;
   for (let i = 0; i < 10; i++) {
     t.tick(1);
@@ -841,22 +835,35 @@ test('Foreman: プレイヤー位置＋壁の場所で0.3〜0.8s立ち止まり�
   eq(spotted, true, 'プレイヤー＋壁の位置で spot_pause に入る');
   eq(f.pauseFrames >= C.FOREMAN_SPOT_MIN_FRAMES && f.pauseFrames <= C.FOREMAN_SPOT_MAX_FRAMES, true, 'spot停止時間=' + f.pauseFrames);
 
-  // spot_pause 明けに1回目の振り下ろし（耐久 3 -> 2）
   t.tick(f.pauseFrames + 1);
   eq(t.game.stage.hpAt(4, 8), 2, '1回目の振り下ろしで壁Vの耐久が 3 -> 2');
   eq(f.foremanPhase, 'swing_wait', 'swing_wait に移行');
   eq(f.pauseFrames, C.FOREMAN_SWING_INTERVAL_FRAMES, '振り下ろし後 1.0s(60tick) 待機');
 
-  // 1.0s後に2回目の振り下ろし（耐久 2 -> 1）
   t.tick(C.FOREMAN_SWING_INTERVAL_FRAMES + 1);
   eq(t.game.stage.hpAt(4, 8), 1, '1.0s後に2回目の振り下ろしで耐久 2 -> 1');
 
-  // プレイヤーが逃げて判定外になったら、次の1.0s後に振らず方向転換トリガーで歩き出す
   t.p.x = 200;
   t.tick(C.FOREMAN_SWING_INTERVAL_FRAMES + 1);
   eq(t.game.stage.hpAt(4, 8), 1, 'プレイヤーが離脱したら振らない');
   eq(f.foremanPhase, 'patrol', '方向転換トリガーが発動して歩き出す');
   eq(f.dirX, 1, 'プレイヤー方向へ追跡開始');
+});
+test('Foreman: プレイヤー付近で定期立ち止まりタイマーが切れても暴発せず、spot_pause後に必ず1回振り下ろす', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '....V.......P...' }));
+  t.p.x = 72; t.p.y = 216;
+  const f = RK.Enemy.create(t.game.stage, { id: 'foreman', col: 4, row: 8 });
+  f.x = 66; f.y = 216; f.foremanWalkTimer = 1; // 定期タイマーが切れる直前
+  t.game.enemies.push(f);
+  t.game.actors.push(f);
+
+  t.tick(1);
+  eq(f.foremanPhase, 'spot_pause', '目の前で定期小休止に入らず spot_pause に入る');
+
+  // 停止中にプレイヤーが少し横へズレても、1回目はロックした対象を必ず振り下ろす
+  t.p.x = 88;
+  t.tick(f.pauseFrames + 1);
+  eq(t.game.stage.hpAt(4, 8), 2, '停止明けに必ず1回振り下ろして耐久 3 -> 2');
 });
 test('Foreman: 扉(D)・爆弾(B)・鉄柱(I)・壊せない梯子(H)の前では振らず、壊せない', () => {
   ['door', 'bomb', 'pillar', 'ladder_solid'].forEach((objId) => {
@@ -872,7 +879,6 @@ test('Foreman: 扉(D)・爆弾(B)・鉄柱(I)・壊せない梯子(H)の前で�
   });
 });
 test('壁破壊時の相互異常落下: 親方が壁を壊しきるとプレイヤーが異常落下し、プレイヤーが壁を壊しきると親方が異常落下する', () => {
-  // 1. 親方が壁Wを破壊 → プレイヤーが異常落下
   const t1 = setup(mkStage({ 4: FULL, 8: FULL }, { 4: '....P...........', 8: '................' }));
   t1.game.stage.setId(4, 4, 'wall_a');
   const f1 = RK.Enemy.create(t1.game.stage, { id: 'foreman', col: 4, row: 4 });
@@ -883,7 +889,6 @@ test('壁破壊時の相互異常落下: 親方が壁を壊しきるとプレイ
   eq(t1.p.mode, 'abnormal_fall', 'プレイヤーが異常落下する');
   eq(f1.mode, 'ground', '親方自身は落ちない');
 
-  // 2. プレイヤーが壁Wを破壊 → 親方が異常落下
   const t2 = setup(mkStage({ 4: FULL, 8: FULL }, { 4: '....P...........', 8: '................' }));
   t2.game.stage.setId(4, 4, 'wall_a');
   const f2 = RK.Enemy.create(t2.game.stage, { id: 'foreman', col: 4, row: 4 });
@@ -899,7 +904,6 @@ test('壊せる梯子(L): 1振りで叩いた位置から0.2s(12tick)間隔で�
     { 2: FULL, 8: FULL },
     { 3: '....LL..........', 4: '....LL..........', 5: '....LL..........', 6: '....LL..........', 7: '....LL..........', 8: 'P...LL..........' }
   ));
-  // col4 の row5 を叩く → row5 が即座に消え、12tickごとに上下(4&6 → 3&7 → 8)へ連鎖消滅。隣の col5 は残る
   RK.Game.hitCellByHammer(t.game, t.p, 4, 5);
   eq(t.game.stage.idAt(4, 5), 'empty', '0tick: row5 即消滅');
   eq(t.game.stage.idAt(4, 4), 'ladder', '0tick: row4 まだ残る');
@@ -919,41 +923,37 @@ test('壊せる梯子(L): 1振りで叩いた位置から0.2s(12tick)間隔で�
   eq(t.game.stage.idAt(5, 5), 'ladder', '横の col5 には連鎖しない');
 });
 test('壊せる梯子(L): 敵が降りかけで梯子が壊れ始めたら引き返し、深く降りすぎていたらそのまま降りる', () => {
-  // 1. 降りかけ（深さ 6ドット < 12ドット）→ 引き返す
   const t1 = setup(mkStage(
     { 4: FULL, 8: FULL },
     { 4: 'P...............', 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '....L...........' }
   ));
   const e1 = RK.Enemy.create(t1.game.stage, { id: 'chaser', col: 4, row: 4 });
-  e1.mode = 'ladder'; e1.ladderCol = 4; e1.y = 126; e1.dirY = 1; // span.top=120 から6ドット下降中
+  e1.mode = 'ladder'; e1.ladderCol = 4; e1.y = 126; e1.dirY = 1;
   t1.game.enemies.push(e1); t1.game.actors.push(e1);
   RK.Game.hitCellByHammer(t1.game, t1.p, 4, 8);
   eq(e1.dirY, -1, '降りかけ(6ドット)の敵は上へ引き返す');
 
-  // 2. 深く降りすぎている（深さ 20ドット >= 12ドット）→ そのまま降りる
   const t2 = setup(mkStage(
     { 4: FULL, 8: FULL },
     { 4: 'P...............', 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '....L...........' }
   ));
   const e2 = RK.Enemy.create(t2.game.stage, { id: 'chaser', col: 4, row: 4 });
-  e2.mode = 'ladder'; e2.ladderCol = 4; e2.y = 140; e2.dirY = 1; // span.top=120 から20ドット下降中
+  e2.mode = 'ladder'; e2.ladderCol = 4; e2.y = 140; e2.dirY = 1;
   t2.game.enemies.push(e2); t2.game.actors.push(e2);
   RK.Game.hitCellByHammer(t2.game, t2.p, 4, 8);
   eq(e2.dirY, 1, '深く降りすぎた(20ドット)敵は引き返さずそのまま降りる');
 });
 test('壊せる梯子(L): 捕まっていた部分が消滅したら異常落下し、ちょうど床の高さに着地できる時は地面着地トリガーが発動する', () => {
-  // 1. 空中の梯子部分が消滅 → 異常落下
   const t1 = setup(mkStage(
     { 4: FULL, 8: FULL },
     { 4: 'P...............', 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '....L...........' }
   ));
   const e1 = RK.Enemy.create(t1.game.stage, { id: 'chaser', col: 4, row: 6 });
-  e1.mode = 'ladder'; e1.ladderCol = 4; e1.y = 160; e1.dirY = -1; // row6 空中に捕まっている
+  e1.mode = 'ladder'; e1.ladderCol = 4; e1.y = 160; e1.dirY = -1;
   t1.game.enemies.push(e1); t1.game.actors.push(e1);
   RK.Game.hitCellByHammer(t1.game, t1.p, 4, 6);
   eq(e1.mode, 'abnormal_fall', '空中の梯子部分が消滅したら異常落下する');
 
-  // 2. ちょうど床の高さ(y=216)で梯子部分が消滅 → 地面に着地し普段の着地トリガーが発動
   const t2 = setup(mkStage(
     { 4: FULL, 8: FULL },
     { 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '....L.....P.....' }
