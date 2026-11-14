@@ -5,7 +5,7 @@
  *   - 'cell_center'  : 地上歩行中にセルの中心（x === stage.centerX(col)）へ到達した瞬間
  *   - 'blocked'      : 地上歩行中に障害物（樽など）で進めなくなった瞬間
  *   - 'ladder_floor' : 梯子昇降中に床の高さ（y % CELL_H === 0）または梯子端へ到達した瞬間
- *   - 'land'         : 通常落下から着地した瞬間（スタンはしない。親方以外は速度段階のみ上昇）
+ *   - 'land'         : 通常落下から着地した瞬間（スタン・速度段階上昇ともにしない）
  *   - 'stun_end'     : 着地後のスタンが終了した瞬間（異常落下後の再判定などに使用）
  *
  * 各敵種（chaser / runner / foreman / fast_chaser）の判断ロジックは registerAI(id, fn) で差し込む。
@@ -41,7 +41,7 @@
       stunFrames: 0,                      // スタン残りtick
       wasAbnormalFall: false,             // 直前の落下が異常落下だったか（スタン終了時の再判定用）
       invincible: false,                  // 無敵状態（'abnormal_fall' 中のみ true）
-      speedBoost: 0,                      // 落下経験による速度上昇段階（0〜2。親方は未使用）
+      speedBoost: 0,                      // 異常落下経験による速度上昇段階（0〜2。親方は未使用）
       moveAccum: 0,                       // サブピクセル移動累積（整数ドット移動を決定的に維持）
       climbAccum: 0,                      // サブピクセル梯子昇降累積（整数ドット移動を決定的に維持）
       needsReeval: false,                 // 再判定フラグ（梯子付近の停止・循環時などに使用）
@@ -267,10 +267,7 @@
     if (r.landed) {
       e.mode = 'ground';
       e.wasAbnormalFall = false;
-      // 通常落下ではスタンしない（速度段階のみ上昇。親方は対象外）
-      if (e.id !== 'foreman') {
-        e.speedBoost = Math.min(2, e.speedBoost + 1);
-      }
+      // 通常落下ではスタンも加速（speedBoost上昇）もしない
       triggerAI(e, 'land', game);
     }
   }
