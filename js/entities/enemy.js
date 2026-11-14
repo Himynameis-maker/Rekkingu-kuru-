@@ -1,12 +1,12 @@
 /* ===== 敵の共通土台（ステップ8b） =====
  * 座標系・地形判定・落下状態はプレイヤーと共通（中心x + 足y、整数ドット）。
  * AI（方向転換・梯子選択）は毎フレーム実行せず、「グリッドの節目（イベント）」でのみ呼び出す:
- *   - 'spawn'            : スポーン直後
- *   - 'cell_center'      : 地上歩行中にセルの中心（x === stage.centerX(col)）へ到達した瞬間
- *   - 'blocked'          : 地上歩行中に障害物（樽など）で進めなくなった瞬間
- *   - 'ladder_floor'     : 梯子昇降中に床の高さ（y % CELL_H === 0）または梯子端へ到達した瞬間
- *   - 'land'             : 通常落下から着地した瞬間（親方以外はスタン＆速度段階上昇）
- *   - 'abnormal_recover' : 異常落下から着地した瞬間（無敵即解除。親方以外はスタン）
+ *   - 'spawn'        : スポーン直後
+ *   - 'cell_center'  : 地上歩行中にセルの中心（x === stage.centerX(col)）へ到達した瞬間
+ *   - 'blocked'      : 地上歩行中に障害物（樽など）で進めなくなった瞬間
+ *   - 'ladder_floor' : 梯子昇降中に床の高さ（y % CELL_H === 0）または梯子端へ到達した瞬間
+ *   - 'land'         : 通常落下から着地した瞬間（親方以外はスタン＆速度段階上昇）
+ *   - 'stun_end'     : 着地後のスタンが終了した瞬間（異常落下後の再判定などに使用）
  *
  * 各敵種（chaser / runner / foreman / fast_chaser）の判断ロジックは registerAI(id, fn) で差し込む。
  */
@@ -39,21 +39,27 @@
       mode: 'ground',                     // 'ground' | 'fall' | 'abnormal_fall' | 'ladder'
       ladderCol: -1,                      // 'ladder' 中に乗っている梯子の列
       stunFrames: 0,                      // スタン残りtick
+      wasAbnormalFall: false,             // 直前の落下が異常落下だったか（スタン終了時の再判定用）
       invincible: false,                  // 無敵状態（'abnormal_fall' 中のみ true）
       speedBoost: 0,                      // 落下経験による速度上昇段階（0〜2。親方は未使用）
+      moveAccum: 0,                       // サブピクセル移動累積（整数ドット移動を決定的に維持）
+      needsReeval: false,                 // 再判定フラグ（梯子付近の停止・循環時などに使用）
       hammerFrames: 0,                    // 親方のハンマー表示残りtick
       pauseFrames: 0,                     // 親方の行動切替停止残りtick
     };
   }
 
-  /** 基本移動速度（ドット/tick） */
-  function baseSpeed(e) {
-    return e.id === 'fast_chaser' ? C.FAST_CHASER_SPEED : C.ENEMY_SPEED;
+  /** 現在の移動速度（ドット/tick） */
+  function currentSpeed(e) {
+    const base = e.id === 'fast_chaser' ? C.FAST_CHASER_SPEED : C.ENEMY_SPEED;
+    if (e.id === 'foreman') return base;
+    return base + e.speedBoost * (C.ENEMY_SPEED_BOOST_STEP || 0);
   }
 
   /** 通常落下開始 */
   function startFall(e) {
     e.mode = 'fall';
+    e.wasAbnormalFall = false;
     e.ladderCol = -1;
     e.dirY = 0;
   }
@@ -61,6 +67,7 @@
   /** 異常落下開始（梯子破壊・爆発など）。落下中は無敵 */
   function startAbnormalFall(e) {
     e.mode = 'abnormal_fall';
+    e.wasAbnormalFall = true;
     e.invincible = true;
     e.ladderCol = -1;
     e.dirY = 0;
@@ -139,7 +146,18 @@
     }
     if (e.stunFrames > 0 || e.pauseFrames > 0) return;
 
-    const steps = baseSpeed(e);
+    // 停止中（dirX === 0）でも再判定フラグが立っていればセル中心イベントで再評価できる
+    if (e.dirX === 0) {
+      if (e.needsReeval) {
+        triggerAI(e, 'cell_center', game);
+      }
+      return;
+    }
+
+    e.moveAccum += currentSpeed(e);
+    const steps = Math.floor(e.moveAccum + 1e-9);
+    e.moveAccum -= steps;
+
     for (let i = 0; i < steps; i++) {
       if (e.mode !== 'ground' || e.dirX === 0) break;
       const dir = e.dirX > 0 ? 1 : -1;
@@ -153,17 +171,17 @@
 
       e.x = RK.Physics.wrapX(nx);
 
-      if (!RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
-        startFall(e);
-        break;
-      }
-
-      // セル中心の節目に到達したらAI判断
+      // セル中心の節目に到達したらAI判断（穴の上の梯子降り判定を含むため足場チェック前に評価）
       const col = stage.colAt(e.x);
       if (e.x === stage.centerX(col)) {
         const prevDirX = e.dirX;
         triggerAI(e, 'cell_center', game);
         if (e.mode !== 'ground' || e.dirX !== prevDirX) break;
+      }
+
+      if (!RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
+        startFall(e);
+        break;
       }
     }
   }
@@ -171,7 +189,9 @@
   /** 梯子上での1tick更新 */
   function updateLadder(e, game) {
     const stage = game.stage;
-    const span = RK.Physics.ladderSpan(stage, e.ladderCol, e.y);
+    // 上昇中は足元の行、下降中は足の下の行も含めて梯子連続性を確認
+    const checkY = e.dirY > 0 ? e.y + 1 : e.y;
+    const span = RK.Physics.ladderSpan(stage, e.ladderCol, checkY) || RK.Physics.ladderSpan(stage, e.ladderCol, e.y);
     if (!span) {
       startAbnormalFall(e);
       return;
@@ -186,6 +206,13 @@
 
       if (ny === e.y) {
         triggerAI(e, 'ladder_floor', game);
+        // 梯子の端でまだ ladder モードのままなら、足場があれば地上へ降りる
+        if (e.mode === 'ladder' && RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
+          e.mode = 'ground';
+          e.ladderCol = -1;
+          e.dirY = 0;
+          e.dirX = e.facing || 1;
+        }
         break;
       }
 
@@ -207,6 +234,7 @@
     e.y = r.y;
     if (r.landed) {
       e.mode = 'ground';
+      e.wasAbnormalFall = false;
       if (e.id !== 'foreman') {
         e.stunFrames = C.ENEMY_FALL_STUN_FRAMES;
         e.speedBoost = Math.min(2, e.speedBoost + 1);
@@ -226,16 +254,26 @@
       if (e.id !== 'foreman') {
         e.stunFrames = C.ENEMY_ABNORMAL_LAND_STUN_FRAMES;
         e.speedBoost = Math.min(2, e.speedBoost + 1);
+      } else {
+        e.wasAbnormalFall = false;
+        triggerAI(e, 'stun_end', game);
       }
-      triggerAI(e, 'abnormal_recover', game);
     }
   }
 
   /** 1tick 進める */
   function update(e, game) {
     if (e.hammerFrames > 0) e.hammerFrames--;
-    if (e.stunFrames > 0) e.stunFrames--;
     if (e.pauseFrames > 0) e.pauseFrames--;
+
+    if (e.stunFrames > 0) {
+      e.stunFrames--;
+      if (e.stunFrames === 0) {
+        triggerAI(e, 'stun_end', game);
+        e.wasAbnormalFall = false;
+      }
+    }
+
     e.invincible = (e.mode === 'abnormal_fall');
 
     if (e.mode === 'abnormal_fall') {
