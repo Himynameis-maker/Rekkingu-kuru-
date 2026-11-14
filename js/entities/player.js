@@ -28,7 +28,8 @@
  *              梯子の上が穴（床なし）の場合は、上端(span.top)で床のある列へは横に入れない（足が床につっかえて上の段に立てない。確定）。
  *              床の無い列へは動け、梯子の範囲を出れば落ちる。
  *              下端に着いて足場に乗ったら 'ground' に戻る。
- *  - 'ground' から: 上入力で足元の梯子に乗る（中心から LADDER_GRAB_DOTS 以内）。上の段から梯子へは、穴を歩いて落ち、落下中に上入力でつかまる。
+ *  - 'ground' から: 上入力で足元の梯子に乗る（中心から LADDER_GRAB_DOTS 以内）。下入力で、足場面の真下に梯子があり、その真上に床があれば床をすり抜けて乗る（確定）。
+ *    穴のてっぺんの梯子へは、穴を歩いて落ち、落下中に上入力でつかまる（下入力では乗らない）。
  *
  * 移動のしかた（config.js の3つの値で調整）:
  *  - 押した瞬間 = 「チョン」開始。PLAYER_TAP_FRAMES tick かけて PLAYER_TAP_DOTS ドット進む。
@@ -164,10 +165,30 @@
     if (move !== 0) moveX(p, move, stage, solidFloor);
   }
 
-  /** 足場の上での1tick。上入力で足元に梯子があれば、その tick は乗るだけ。なければ左右移動。外れたら落下開始（y の移動は次のtick） */
+  /**
+   * 足場面に立っているとき、その真下のセルにある梯子の列（中心から LADDER_GRAB_DOTS 以内）。無ければ -1。
+   * 床の上から下入力で、床をすり抜けて梯子へ降りるために使う。梯子の真上に床（'='）がある列だけが対象
+   * （穴のてっぺんの梯子には、下入力では乗らない。確定）。
+   */
+  function ladderBelowCol(p, stage) {
+    if (p.y % C.CELL_H !== 0 || p.y >= C.HEIGHT) return -1;
+    const row = p.y / C.CELL_H;                         // 足場面のすぐ下の行
+    const col = RK.Physics.ladderColAt(stage, p.x, row);
+    if (col < 0 || !stage.hasFloor(col, row - 1)) return -1;
+    return col;
+  }
+
+  /**
+   * 足場の上での1tick。梯子に乗れるときは、その tick は乗るだけ。なければ左右移動。外れたら落下開始（y の移動は次のtick）。
+   *  - 上入力: 足元（体のいるセル）に梯子があれば乗る。梯子の真上に床があっても、昇ってすり抜けられる（updateLadder）。
+   *  - 下入力: 真下のセルに梯子があれば、床をすり抜けて乗る（梯子の上端 span.top から降りる）。
+   */
   function updateGround(p, input, stage) {
     if (input.dy < 0) {
       const col = RK.Physics.ladderColAt(stage, p.x, stage.rowAtFeet(p.y));
+      if (col >= 0) { boardLadder(p, stage, col); return; }
+    } else if (input.dy > 0) {
+      const col = ladderBelowCol(p, stage);
       if (col >= 0) { boardLadder(p, stage, col); return; }
     }
     stepHorizontal(p, input, stage);
