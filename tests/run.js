@@ -316,8 +316,6 @@ test('歩行クールタイムとハンマークールタイムは独立して�
 });
 test('歩行可能な状態(ground)以外ではハンマーを振れない（通常落下中・梯子中）', () => {
   // 梯子上の壁
-  const lad = setup(mkStage({ 6: '====.===========', 8: FULL }, { 7: '....L...........', 8: '.P..W...........' }));
-  // row8 col4 に L と W は同時に置けないので、row7 の L 上で row7 の W を別列に置く代わりに、梯子のセルで hammerPressed をテスト
   const lad2 = setup(mkStage({ 6: '====.===========', 8: FULL }, { 7: '....L...........', 8: '.P..L...........' }));
   lad2.p.x = 72;
   lad2.press('up'); lad2.tick(5); lad2.release('up');
@@ -336,6 +334,93 @@ test('歩行可能な状態(ground)以外ではハンマーを振れない（通
   }
   eq(fallSt.p.hammerFrames, 0, '落下中は振れない');
   eq(fallSt.game.stage.idAt(4, 7), 'wall_a', '落下中は壁を壊せない');
+});
+
+console.log('Player: 異常落下（ステップ8a）');
+// 多段ステージ: row2(y=72), row4(y=120), row6(y=168), row8(y=216) に床。
+// col4 は途中の段(row4)に樽があり、col6 は一番下の床(row8)に樽がある。
+const ABNORMAL_STAGE = mkStage(
+  { 2: FULL, 4: FULL, 6: FULL, 8: FULL },
+  { 2: '..P.............', 4: '....O...........', 8: '......O.........' }
+);
+test('異常落下: 途中の床をすべてすり抜け、一番下の床(y=216)で停止する', () => {
+  const t = setup(ABNORMAL_STAGE);
+  eq(t.p.x, 40, 'x0'); eq(t.p.y, 72, 'y0');
+  RK.Player.startAbnormalFall(t.p);
+  eq(t.p.mode, 'abnormal_fall', 'mode');
+  eq(t.p.invincible, true, '落下開始時に無敵');
+  // y=72 から y=216 まで 144ドット = 72tick（途中の y=120, y=168 の床を素通りする）
+  t.tick(71);
+  eq(t.p.mode, 'abnormal_fall', '71tick後はまだ落下中');
+  eq(t.p.y, 214, 'y=214');
+  eq(t.p.invincible, true, '着地直前も無敵');
+  t.tick(1);
+  eq(t.p.y, 216, '一番下の床 y=216 で停止');
+  eq(t.p.mode, 'ground', 'mode=ground');
+  eq(t.p.invincible, false, '着地した瞬間に無敵が即座に解除される');
+  eq(t.p.stunFrames, C.PLAYER_ABNORMAL_LAND_STUN_FRAMES, '着地硬直開始');
+});
+test('異常落下: 途中の段にある樽もすり抜け、一番下の床の上に乗っている樽の上面(y=192)で停止する', () => {
+  // 途中の段(row4)の樽の上(col4, x=72, y=72)から異常落下 → row4の樽をすり抜けてy=216まで落ちる
+  const a = setup(ABNORMAL_STAGE);
+  a.p.x = 72; a.p.y = 72;
+  RK.Player.startAbnormalFall(a.p);
+  a.tick(80);
+  eq(a.p.y, 216, '途中の段の樽はすり抜けて一番下の床へ');
+  eq(a.p.mode, 'ground', 'mode');
+
+  // 一番下の床(row8)の樽の真上(col6, x=104, y=72)から異常落下 → y=192(樽の上面)で停止
+  const b = setup(ABNORMAL_STAGE);
+  b.p.x = 104; b.p.y = 72;
+  RK.Player.startAbnormalFall(b.p);
+  b.tick(60); // 120ドット = 60tick で y=192
+  eq(b.p.y, 192, '一番下の床の樽の上面で停止');
+  eq(b.p.mode, 'ground', 'mode');
+  eq(b.p.invincible, false, '着地後即座に無敵解除');
+  eq(b.p.stunFrames, C.PLAYER_ABNORMAL_LAND_STUN_FRAMES, '着地硬直開始');
+});
+test('異常落下: 着地後 0.5s(PLAYER_ABNORMAL_LAND_STUN_FRAMES = 30tick) は一切動けず、経過後に動ける', () => {
+  const t = setup(ABNORMAL_STAGE);
+  RK.Player.startAbnormalFall(t.p);
+  t.tick(72); // 着地 tick（この時点で stunFrames = 30）
+  eq(t.p.y, 216, '着地');
+  const xLand = t.p.x;
+  // 硬直中（29tick間）は左右移動・ハンマー・梯子すべて不可
+  t.press('right'); t.press('hammer');
+  t.tick(C.PLAYER_ABNORMAL_LAND_STUN_FRAMES - 1);
+  eq(t.p.x, xLand, '硬直中は動けない');
+  eq(t.p.hammerFrames, 0, '硬直中はハンマーも振れない');
+  // 30tick経過した次のtickから動ける
+  t.release('hammer'); t.tick(1);
+  eq(t.p.stunFrames, 0, '硬直解除');
+  eq(t.p.x > xLand, true, '硬直解除後に動ける x=' + t.p.x);
+});
+test('異常落下中は左右移動・梯子つかまり・ハンマー攻撃すべて無効', () => {
+  const t = setup(mkStage(
+    { 4: FULL, 8: FULL },
+    { 4: '.P..L...........', 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '....L...........' }
+  ));
+  t.p.x = 72; // 梯子と同じ列
+  RK.Player.startAbnormalFall(t.p);
+  t.press('right'); t.press('up'); t.press('hammer');
+  t.tick(10);
+  eq(t.p.mode, 'abnormal_fall', '梯子につかまらない');
+  eq(t.p.x, 72, '左右に動かない');
+  eq(t.p.hammerFrames, 0, 'ハンマーを振れない');
+  eq(t.p.invincible, true, '落下中は無敵のまま');
+});
+test('梯子昇降中やチョン移動中から異常落下に入っても状態が正しくリセットされる', () => {
+  const t = setup(mkStage(
+    { 6: '====.===========', 8: FULL },
+    { 7: '....L...........', 8: '.P..L...........' }
+  ));
+  t.p.x = 72;
+  t.press('up'); t.tick(10); t.release('up');
+  eq(t.p.mode, 'ladder', '梯子中');
+  RK.Player.startAbnormalFall(t.p);
+  eq(t.p.mode, 'abnormal_fall', '梯子から異常落下へ遷移');
+  eq(t.p.ladderCol, -1, '梯子列リセット');
+  eq(t.p.invincible, true, '無敵ON');
 });
 
 console.log('地形: 足場（床・樽）');
