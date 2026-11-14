@@ -51,6 +51,7 @@
       facing: 1,                          // 向き。-1=左 / 1=右
       mode: 'ground',                     // 'ground' / 'fall'（通常落下）/ 'abnormal_fall'（異常落下）/ 'ladder'
       ladderCol: -1,                      // 'ladder' のとき乗っている梯子の列
+      climbAccum: 0,                      // 梯子昇降のサブピクセル累積（小数値速度にも対応）
       stepDir: 0,                         // チョン移動の向き
       stepTick: C.PLAYER_TAP_FRAMES,      // チョン開始からの経過tick。PLAYER_TAP_FRAMES 以上なら「チョンではない」
       hammerFrames: 0,                    // ハンマー表示の残りtick（0なら非表示）
@@ -81,6 +82,7 @@
   function startFall(p) {
     p.mode = 'fall';
     p.ladderCol = -1;
+    p.climbAccum = 0;
     p.stepDir = 0;
     p.stepTick = C.PLAYER_TAP_FRAMES;
     p.hammerLockFrames = 0;
@@ -91,6 +93,7 @@
     p.mode = 'abnormal_fall';
     p.invincible = true;
     p.ladderCol = -1;
+    p.climbAccum = 0;
     p.stepDir = 0;
     p.stepTick = C.PLAYER_TAP_FRAMES;
     p.hammerLockFrames = 0;
@@ -101,6 +104,7 @@
   function boardLadder(p, stage, col) {
     p.mode = 'ladder';
     p.ladderCol = col;
+    p.climbAccum = 0;
     p.x = stage.centerX(col);
     p.stepDir = 0;
     p.stepTick = C.PLAYER_TAP_FRAMES;
@@ -208,16 +212,28 @@
     const cx = stage.centerX(p.ladderCol);
     let climbed = false;
     if (input.dy !== 0 && Math.abs(p.x - cx) <= C.LADDER_GRAB_DOTS) {
-      const ny = Math.min(Math.max(p.y + input.dy * C.PLAYER_CLIMB_SPEED, span.top), span.bottom);
-      if (ny !== p.y) { p.y = ny; p.x = cx; climbed = true; }
+      p.climbAccum += C.PLAYER_CLIMB_SPEED;
+      const steps = Math.floor(p.climbAccum + 1e-9);
+      p.climbAccum -= steps;
+      if (steps > 0) {
+        const ny = Math.min(Math.max(p.y + input.dy * steps, span.top), span.bottom);
+        if (ny !== p.y) { p.y = ny; p.x = cx; climbed = true; }
+      }
+    } else {
+      p.climbAccum = 0;
     }
     if (!climbed) stepHorizontal(p, input, stage, p.y === span.top);   // てっぺんでは床のある列へ入れない
 
     if ((p.y === span.top || p.y === span.bottom) && RK.Physics.isSupported(stage, p.x, p.y, p.w)) {
       p.mode = 'ground';                                          // 梯子の端で足場に乗った
+      p.climbAccum = 0;
     } else if (Math.abs(p.x - cx) > C.LADDER_GRAB_DOTS) {
-      if (RK.Physics.isSupported(stage, p.x, p.y, p.w)) p.mode = 'ground';   // 途中の床の高さで横に降りて床に乗った
-      else startFall(p);                                                     // 梯子から外れた
+      if (RK.Physics.isSupported(stage, p.x, p.y, p.w)) {
+        p.mode = 'ground';                                        // 途中の床の高さで横に降りて床に乗った
+        p.climbAccum = 0;
+      } else {
+        startFall(p);                                             // 梯子から外れた
+      }
     }
   }
 
