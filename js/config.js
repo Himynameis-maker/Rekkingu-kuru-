@@ -38,9 +38,11 @@
     PLAYER_ABNORMAL_FALL_SPEED: 2,        // 異常落下の速さ。通常落下と同じ（1tickあたり2ドット）
     PLAYER_ABNORMAL_LAND_STUN_FRAMES: 30, // 異常落下の着地後に動けないtick数（0.5秒 @ 60Hz。変更可能）
 
-    // --- 梯子（ステップ5。暫定値） ---
-    PLAYER_CLIMB_SPEED: 1,  // プレイヤーの梯子昇降速度（上下共通、ドット/tick。小数値も可）。1なら24ドット(1セル)を24tick
-    LADDER_GRAB_DOTS: 4,    // 梯子の中心から何ドット以内なら乗れる/つかまれる/つかまっていられるか（中心x のずれ）
+    // --- 梯子（ステップ5・8b-4） ---
+    PLAYER_CLIMB_SPEED: 1,              // プレイヤーの梯子昇降速度（上下共通、ドット/tick。小数値も可）
+    LADDER_GRAB_DOTS: 4,                // 梯子の中心から何ドット以内なら乗れる/つかまれる/つかまっていられるか（中心x のずれ）
+    LADDER_COLLAPSE_INTERVAL_FRAMES: 12,// 壊せる梯子(L)の連鎖崩壊間隔（0.2秒 @ 60Hz）
+    LADDER_RETREAT_DOTS: 12,            // 梯子崩壊開始時、上から降りかけの敵が引き返す上限深さ（ドット。直しやすいよう定数化）
 
     // --- 壁の耐久値（ステップ7。確定） ---
     WALL_A_HP: 1,           // 壁A (W): 1回叩くと破壊
@@ -53,17 +55,32 @@
     HAMMER_COOLDOWN_FRAMES: 18, // ハンマーを振ったあと、次のハンマーを振れるまでのtick数（0.3秒 @ 60Hz）
 
     // --- 敵共通（ステップ8b。暫定値） ---
-    ENEMY_W: 12,                        // 敵の当たり幅(ドット)
-    ENEMY_H: 24,                        // 敵の当たり高さ(ドット)
-    ENEMY_SPEED: 0.8,                   // Chaser の基本移動速度（ドット/tick。仕様比率 3.2 : 3.6 : 4 に準拠。暫定）
-    RUNNER_SPEED: 0.9,                  // Runner の基本移動速度（ドット/tick。暫定）
-    FAST_CHASER_SPEED: 1,               // Fast Chaser の移動速度（ドット/tick。暫定）
-    ENEMY_SPEED_BOOST_STEP: 0.2,        // 落下経験1回あたりの速度上昇幅（最大2段階。暫定）
-    ENEMY_CLIMB_SPEED: 1,               // Chaser の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
-    RUNNER_CLIMB_SPEED: 1,              // Runner の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
-    FOREMAN_CLIMB_SPEED: 1,             // Foreman の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
-    FAST_CHASER_CLIMB_SPEED: 1,         // Fast Chaser の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
-    ENEMY_FALL_SPEED: 2,                // 敵の落下速度（ドット/tick。暫定）
-    ENEMY_ABNORMAL_LAND_STUN_FRAMES: 60 // 敵の異常落下後のスタンtick数（1.0秒 @ 60Hz。暫定。親方は対象外）
+    ENEMY_W: 12,                         // 敵の当たり幅(ドット)
+    ENEMY_H: 24,                         // 敵の当たり高さ(ドット)
+    ENEMY_SPEED: 0.8,                    // Chaser の基本移動速度（ドット/tick。仕様比率 3.2 : 3.6 : 4 に準拠。暫定）
+    RUNNER_SPEED: 0.9,                   // Runner の基本移動速度（ドット/tick。暫定）
+    FAST_CHASER_SPEED: 1,                // Fast Chaser の移動速度（ドット/tick。暫定）
+    FOREMAN_SPEED: 1.1,                  // Foreman（親方）の移動速度（ドット/tick。ゲーム中最速、加速なし）
+    ENEMY_SPEED_BOOST_STEP: 0.2,         // 異常落下経験1回あたりの速度上昇幅（最大2段階。通常落下・親方は対象外）
+    ENEMY_CLIMB_SPEED: 1,                // Chaser の梯子昇降速度（上下共通、ドット/tick。小数値も可）
+    RUNNER_CLIMB_SPEED: 1,               // Runner の梯子昇降速度（上下共通、ドット/tick。小数値も可）
+    FOREMAN_CLIMB_SPEED: 1.1,            // Foreman の梯子昇降速度（上下共通、ドット/tick。小数値も可）
+    FAST_CHASER_CLIMB_SPEED: 1,          // Fast Chaser の梯子昇降速度（上下共通、ドット/tick。小数値も可）
+    ENEMY_FALL_SPEED: 2,                 // 敵の落下速度（ドット/tick）
+    ENEMY_ABNORMAL_LAND_STUN_FRAMES: 60, // 敵の異常落下後のスタンtick数（1.0秒 @ 60Hz。親方はプレイヤーと同じ30tick）
+
+    // --- 親方（Foreman）専用パラメータ（ステップ8b-4） ---
+    FOREMAN_WALK_MIN_FRAMES: 240,        // 立ち止まりまでの最小移動時間（4.0秒 @ 60Hz）
+    FOREMAN_WALK_MAX_FRAMES: 360,        // 立ち止まりまでの最大移動時間（6.0秒 @ 60Hz）
+    FOREMAN_PAUSE_MIN_FRAMES: 36,        // 定期立ち止まりの最小時間（0.6秒 @ 60Hz）
+    FOREMAN_PAUSE_MAX_FRAMES: 72,        // 定期立ち止まりの最大時間（1.2秒 @ 60Hz）
+    FOREMAN_SPOT_MIN_FRAMES: 18,         // プレイヤーグリッド到達時の停止最小時間（0.3秒 @ 60Hz）
+    FOREMAN_SPOT_MAX_FRAMES: 48,         // プレイヤーグリッド到達時の停止最大時間（0.8秒 @ 60Hz）
+    FOREMAN_SWING_INTERVAL_FRAMES: 60,   // 振り下ろし後から次の振り/トリガー判定までの時間（1.0秒 @ 60Hz）
+    FOREMAN_CHECK_INTERVAL: 4,           // 接近・ハシゴ高さ合わせの荒いチェック周期（tick）
+    FOREMAN_ALIGN_X_RANGE: 6,            // 位置合わせ立ち止まりの横判定範囲（ドット）
+    FOREMAN_ALIGN_Y_RANGE: 12,           // 位置合わせ立ち止まりの縦判定範囲（ドット）
+    FOREMAN_SWING_X_RANGE: 14,           // 振り判断の横判定範囲（ドット。位置合わせより広め）
+    FOREMAN_SWING_Y_RANGE: 16            // 振り判断の縦判定範囲（ドット）
   });
 })(window);
