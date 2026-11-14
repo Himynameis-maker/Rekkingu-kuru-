@@ -55,8 +55,9 @@
     // --- 敵共通（ステップ8b。暫定値） ---
     ENEMY_W: 12,                        // 敵の当たり幅(ドット)
     ENEMY_H: 24,                        // 敵の当たり高さ(ドット)
-    ENEMY_SPEED: 1,                     // 敵の基本移動速度（ドット/tick。暫定）
-    FAST_CHASER_SPEED: 2,               // Fast Chaser の移動速度（ドット/tick。暫定）
+    ENEMY_SPEED: 0.8,                   // 通常敵の基本移動速度（ドット/tick。仕様比率 3.2 : 4 に準拠。暫定）
+    FAST_CHASER_SPEED: 1,               // Fast Chaser の移動速度（ドット/tick。暫定）
+    ENEMY_SPEED_BOOST_STEP: 0.2,        // 落下経験1回あたりの速度上昇幅（最大2段階。暫定）
     ENEMY_CLIMB_SPEED: 1,               // 敵の梯子昇降速度（ドット/tick。暫定）
     ENEMY_FALL_SPEED: 2,                // 敵の落下速度（ドット/tick。暫定）
     ENEMY_FALL_STUN_FRAMES: 60,         // 敵の通常落下後のスタンtick数（1.0秒 @ 60Hz。暫定。親方は対象外）
