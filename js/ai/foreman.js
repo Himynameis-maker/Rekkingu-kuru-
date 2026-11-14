@@ -1,24 +1,29 @@
-/* ===== 親方（Foreman）行動アルゴリズム（ステップ8b-4） =====
- * 仕様に基づく決定的な追跡・破壊AI:
- *   1. ゲーム中最速（FOREMAN_SPEED = 1.1）で Chaser と同じ追跡ルールで移動（加速なし）。
- *   2. 移動開始から 4.0〜6.0s（240〜360 tick）経つと 0.6〜1.2s（36〜72 tick）立ち止まり、
- *      動き出す瞬間に方向転換トリガー（フル再評価）が働く（プレイヤー至近距離では暴発を抑制）。
- *   3. 2tick周期のチェック＋生座標 (x, y) 追尾:
- *      - 平地ではタイミングの噛み合わせによりプレイヤー横で止まることも、すれ違い・追い抜きも起きる。
- *      - ハシゴ上ではプレイヤーの生の y 座標へ合わせようとするため、速度の端数と周期のズレにより
- *        数ドット上下に揺れてから止まる人間味のある動きが自然に発生する。
- *   4. プレイヤーのグリッドに辿り着き、そこに壊せる壁（W/w/V）または壊せる梯子（L）があり親方もそこにいるとき、
- *      対象セルをロックして 0.3〜0.8s（18〜48 tick）立ち止まる。
- *      停止明けに対象が残っていれば最低1回は必ずハンマーを振り下ろし、さらに 1.0s（60 tick）後に
- *      プレイヤーがまだ判定範囲内かつ対象が残っていれば続けて振り下ろす。
- *      判定外・対象なしになれば方向転換トリガーを発動して歩き出す。
- *   5. 扉(D)・爆弾(B)・鉄柱(I)・壊せない梯子(H)は壊せず、ハンマーを振りもしない。
+/* ===== 親方（Foreman）行動アルゴリズム（ステップ8b-4改） =====
+ * レトロ実装の非対称ステートマシン＋目標座標ラッチ（間欠サンプリング）に基づく決定的AI:
+ *   1. 間欠サンプリング（思考タイマー: FOREMAN_THINK_FRAMES = 54 tick / 0.9s）:
+ *      - タイマー発火時・画面端ループ通過時・スタン終了時にのみプレイヤー座標 (targetX, targetY) を記憶し、
+ *        次のタイマー発火まではその記憶した目標座標だけを見て愚直に動く。
+ *      - これにより、近づく際の一拍の遅れ・すれ違い時の行き過ぎ反転・同時登攀時の切り返し・
+ *        オーバーラン落下が乱数なしで自然に発生する。
+ *   2. 地上モードとハシゴモードの分離:
+ *      - すでに同じ高さ（targetY === e.y）にいるなら、横のハシゴには乗らず水平に targetX を目指す。
+ *      - 高さが違うときは最寄りの到達可能なハシゴへ向かい、ハシゴモード中は停止ブレーキなしで等速昇降する。
+ *      - ハシゴ上で中途半端な目標Yに近づくと、速度 1.1 ドット/tick の端数によるオーバーシュートで
+ *        上下に数回ブレたあと FOREMAN_LADDER_WOBBLE_FRAMES 経過でピタッと停止する。
+ *      - ハシゴ下端に着地した瞬間、目標Y到達済みまたは targetX 到達済みなら着地ウェイト（思考タイマー）が
+ *        セットされてその場で一拍静止する（ハシゴ途中からの横抜けでは静止しない）。
+ *   3. 障害物・落下着地・ハンマー破壊:
+ *      - 樽にぶつかったときは反転せず、その場で立ち止まる。
+ *      - 通常落下着地時は targetX = 0 にリセットされるため、樽の有無に関わらず左へ進む。
+ *      - プレイヤーが壊せる壁(W/w/V)または壊せる梯子(L)に立っており親方もそこにいるとき、
+ *        対象セルをロックして 0.3〜0.8s 立ち止まった後、ハンマーを振り下ろす。
+ *        扉(D)・爆弾(B)・鉄柱(I)・壊せない梯子(H)は壊さず、ハンマーも振らない。
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
   const C = RK.CONFIG;
 
-  /** 決定的な疑似乱数（ゲームごとに再現性を維持する） */
+  /** 決定的な疑似乱数（ハンマー停止時間の揺らぎ用） */
   function nextRandInt(game, min, max) {
     if (game.rngState === undefined) {
       game.rngState = 0x5f3759df;
@@ -31,19 +36,11 @@
     return min + Math.floor(u * (max - min + 1));
   }
 
-  function rollWalkFrames(game) {
-    return nextRandInt(game, C.FOREMAN_WALK_MIN_FRAMES, C.FOREMAN_WALK_MAX_FRAMES);
-  }
-
-  function rollPauseFrames(game) {
-    return nextRandInt(game, C.FOREMAN_PAUSE_MIN_FRAMES, C.FOREMAN_PAUSE_MAX_FRAMES);
-  }
-
   function rollSpotFrames(game) {
     return nextRandInt(game, C.FOREMAN_SPOT_MIN_FRAMES, C.FOREMAN_SPOT_MAX_FRAMES);
   }
 
-  /** 親方がハンマーで壊せる対象か（壁3種 W/w/V または壊せる梯子 L のみ。扉・爆弾・鉄柱・不可梯子は false） */
+  /** 親方がハンマーで壊せる対象か（壁3種 W/w/V または壊せる梯子 L のみ） */
   function isBreakableTargetId(id) {
     return id === 'wall_a' || id === 'wall_b' || id === 'wall_c' || id === 'ladder';
   }
@@ -62,7 +59,6 @@
     if (fCol === pCol && fRow === pRow && isBreakableTargetId(stage.idAt(fCol, fRow))) {
       return { col: fCol, row: fRow };
     }
-    // 境界付近でわずかに1列ずれている場合も、親方側またはプレイヤー側に対象があれば許容する
     if (fRow === pRow && Math.abs(fCol - pCol) <= 1) {
       if (isBreakableTargetId(stage.idAt(fCol, fRow))) return { col: fCol, row: fRow };
       if (isBreakableTargetId(stage.idAt(pCol, pRow))) return { col: pCol, row: pRow };
@@ -78,6 +74,19 @@
     return { dx, dy };
   }
 
+  /** プレイヤーの現在座標を目標座標としてラッチ（記憶）する */
+  function samplePlayerTarget(e, player) {
+    if (player) {
+      e.foremanTargetX = player.x;
+      e.foremanTargetY = player.y;
+    } else if (e.foremanTargetX === null) {
+      e.foremanTargetX = e.x;
+      e.foremanTargetY = e.y;
+    }
+    e.foremanThinkTimer = C.FOREMAN_THINK_FRAMES;
+    e.foremanLadderWobble = 0;
+  }
+
   /** ハンマーを1回振り下ろす */
   function swingForemanHammer(e, target, game) {
     e.hammerFrames = C.HAMMER_FRAMES;
@@ -88,16 +97,129 @@
     }
   }
 
-  /** 方向転換トリガーを発動して歩き出す */
-  function triggerTurnAndResume(e, game) {
+  /** ハンマーフェーズ終了時に思考トリガーを発動して歩き出す */
+  function resumeAfterHammer(e, game) {
     e.foremanPhase = 'patrol';
     e.foremanLockedTarget = null;
     e.pauseFrames = 0;
+    samplePlayerTarget(e, game.player);
     e.needsReeval = true;
-    if (e.foremanWalkTimer <= 0) {
-      e.foremanWalkTimer = rollWalkFrames(game);
-    }
     RK.Enemy.triggerAI(e, 'cell_center', game);
+  }
+
+  /** ハシゴを登り切っててっぺんの行き止まりに着いたか */
+  function isAtLadderDeadEnd(stage, e) {
+    if (e.mode !== 'ladder' || e.dirY >= 0) return false;
+    const span = RK.Physics.ladderSpan(stage, e.ladderCol, e.y);
+    if (!span || e.y > span.top) return false;
+    return !RK.Physics.isSupported(stage, e.x, e.y, e.w);
+  }
+
+  /**
+   * 記憶した targetX, targetY に基づいて地上での進行方向を決める。
+   * - 同じ高さ（targetY === e.y）なら横のハシゴには乗らず水平に targetX を目指す。
+   * - 樽にぶつかった場合は反転せず立ち止まる（dirX: 0）。
+   */
+  function decideGroundAction(stage, e) {
+    if (e.foremanTargetX === null || e.foremanTargetY === null) {
+      return { dirX: 0, dirY: 0 };
+    }
+
+    const targetX = e.foremanTargetX;
+    const targetY = e.foremanTargetY;
+    const curCol = stage.wrapCol(stage.colAt(e.x));
+
+    // 1. 異なる高さにいる場合は最寄りの有効な梯子を使う
+    if (targetY !== e.y) {
+      const needUp = targetY < e.y;
+      const targetCol = (RK.ChaserAI && RK.ChaserAI.selectTargetLadder)
+        ? RK.ChaserAI.selectTargetLadder(stage, e, needUp)
+        : -1;
+
+      if (targetCol >= 0) {
+        if (targetCol === curCol) {
+          e.needsReeval = false;
+          return { dirX: 0, dirY: needUp ? -1 : 1 };
+        }
+        const desiredDir = targetCol > curCol ? 1 : -1;
+        const nx = RK.Physics.wrapX(e.x + desiredDir);
+        if (RK.Physics.blockedX(stage, nx, e.y, e.w, e.h, desiredDir)) {
+          // 樽に塞がれたら反転せず立ち止まる
+          e.needsReeval = false;
+          return { dirX: 0, dirY: 0 };
+        }
+        e.needsReeval = false;
+        return { dirX: desiredDir, dirY: 0 };
+      }
+    }
+
+    // 2. 同じ高さ（または有効な梯子なし）の場合: 記憶した targetX へ向かう
+    const dx = targetX - e.x;
+    if (Math.abs(dx) <= C.FOREMAN_ARRIVE_TOLERANCE) {
+      e.needsReeval = false;
+      return { dirX: 0, dirY: 0 };
+    }
+
+    const dir = dx > 0 ? 1 : -1;
+    const nx = RK.Physics.wrapX(e.x + dir);
+    if (RK.Physics.blockedX(stage, nx, e.y, e.w, e.h, dir)) {
+      // 樽にぶつかっても反転せず立ち止まる
+      e.needsReeval = false;
+      return { dirX: 0, dirY: 0 };
+    }
+
+    e.needsReeval = false;
+    return { dirX: dir, dirY: 0 };
+  }
+
+  /**
+   * ハシゴ昇降中の高さ合わせ処理（毎tick実行）。
+   * - 目標Yまで距離がある間は止まらず一定速度で昇降する。
+   * - 中途半端な高さの目標Y付近では速度 1.1 の端数で数回上下にブレたあとピタッと止まる。
+   * - 床の高さに到達し、目標Yと噛み合っていれば地上モードへ降りる。
+   */
+  function updateLadderTracking(stage, e) {
+    if (e.foremanTargetY === null) return;
+    const targetY = e.foremanTargetY;
+    const diffY = targetY - e.y;
+
+    // 床の高さで目標Yと一致（±1ドット）かつ足場があれば地上へ降りる
+    if (e.y % C.CELL_H === 0 && Math.abs(diffY) <= 1 && RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
+      e.mode = 'ground';
+      e.ladderCol = -1;
+      e.climbAccum = 0;
+      e.dirY = 0;
+      e.foremanLadderWobble = 0;
+      const next = decideGroundAction(stage, e);
+      e.dirX = next.dirX;
+      if (next.dirX !== 0) e.facing = next.dirX;
+      return;
+    }
+
+    // すでにピタッと停止完了している場合
+    if (e.dirY === 0 && e.foremanLadderWobble >= C.FOREMAN_LADDER_WOBBLE_FRAMES) {
+      return;
+    }
+
+    // 目標Yの近傍（±2ドット）に入った場合は数回上下にブレてからピタッと停止する
+    if (Math.abs(diffY) <= 2) {
+      e.foremanLadderWobble++;
+      if (e.foremanLadderWobble >= C.FOREMAN_LADDER_WOBBLE_FRAMES) {
+        e.dirY = 0;
+        return;
+      }
+      if (diffY === 0) {
+        // 目標Yちょうどを踏んだ場合でも、まだブレ期間中なら直前の移動方向へ1ドット行き過ぎてブレを作る
+        if (e.dirY === 0) e.dirY = 1;
+      } else {
+        e.dirY = diffY < 0 ? -1 : 1;
+      }
+      return;
+    }
+
+    // 目標Yまで離れている間は止まらず等速昇降
+    e.foremanLadderWobble = 0;
+    e.dirY = diffY < 0 ? -1 : 1;
   }
 
   /** 毎tick呼ばれる親方固有の状態進行 */
@@ -105,42 +227,33 @@
     const stage = game.stage;
     const player = game.player;
 
-    if (e.foremanWalkTimer <= 0 && e.foremanPhase === 'patrol') {
-      e.foremanWalkTimer = rollWalkFrames(game);
+    if (e.foremanTargetX === null || e.foremanTargetY === null) {
+      samplePlayerTarget(e, player);
     }
 
-    // 異常落下中・通常落下中・着地スタン中はロックを解除して待機
+    // 落下中・着地スタン中はハンマーロックを解除して待機
     if (e.mode === 'abnormal_fall' || e.mode === 'fall' || e.stunFrames > 0) {
       e.foremanLockedTarget = null;
       return;
     }
 
-    // 1. 停止・待機フェーズの満了処理
-    if (e.foremanPhase === 'periodic_pause') {
-      if (e.pauseFrames <= 0) {
-        e.foremanWalkTimer = rollWalkFrames(game);
-        triggerTurnAndResume(e, game);
-      }
-      return;
-    }
-
+    // 1. ハンマー前停止フェーズ（spot_pause）
     if (e.foremanPhase === 'spot_pause') {
       if (e.pauseFrames <= 0) {
         const target = e.foremanLockedTarget || findBreakableTargetCell(stage, e, player);
         if (target && isBreakableTargetId(stage.idAt(target.col, target.row))) {
-          // 立ち止まった後、1回目は必ず振り下ろす
           swingForemanHammer(e, target, game);
           e.foremanLockedTarget = target;
           e.foremanPhase = 'swing_wait';
           e.pauseFrames = C.FOREMAN_SWING_INTERVAL_FRAMES;
           return;
         }
-        // 対象がすでに壊れきっていた場合は方向転換トリガー発動
-        triggerTurnAndResume(e, game);
+        resumeAfterHammer(e, game);
       }
       return;
     }
 
+    // 2. ハンマー連続振り待機フェーズ（swing_wait）
     if (e.foremanPhase === 'swing_wait') {
       if (e.pauseFrames <= 0) {
         const locked = e.foremanLockedTarget;
@@ -157,13 +270,12 @@
             return;
           }
         }
-        // プレイヤーが離脱した、または対象が壊れきった場合は方向転換トリガー発動
-        triggerTurnAndResume(e, game);
+        resumeAfterHammer(e, game);
       }
       return;
     }
 
-    // 2. プレイヤー接近判定（プレイヤーと対象が同位置なら、定期立ち止まりより優先して即座に停止）
+    // 3. プレイヤー＋破壊可能オブジェクト（壁・壊せる梯子）の同位置ロック判定
     if (player) {
       const d = playerDelta(e, player);
       if (d.dx <= C.FOREMAN_ALIGN_X_RANGE && d.dy <= C.FOREMAN_ALIGN_Y_RANGE) {
@@ -175,54 +287,105 @@
           return;
         }
       }
+    }
 
-      // 3. patrol（通常移動中）のカウントダウン（プレイヤー至近距離では巡回小休止を抑制）
-      const nearPlayer = (d.dx <= C.CELL_W * 2 && d.dy <= C.FOREMAN_ALIGN_Y_RANGE);
-      if (!nearPlayer && e.foremanWalkTimer > 0) {
-        e.foremanWalkTimer--;
-        if (e.foremanWalkTimer === 0) {
-          e.foremanPhase = 'periodic_pause';
-          e.pauseFrames = rollPauseFrames(game);
-          return;
+    // 4. 間欠サンプリング（思考タイマー）のカウントダウン
+    if (e.foremanThinkTimer > 0) {
+      e.foremanThinkTimer--;
+    }
+    if (e.foremanThinkTimer <= 0) {
+      samplePlayerTarget(e, player);
+      if (e.mode === 'ground') {
+        const next = decideGroundAction(stage, e);
+        if (next.dirY !== 0) {
+          RK.Enemy.triggerAI(e, 'cell_center', game);
+        } else {
+          e.dirX = next.dirX;
+          if (next.dirX !== 0) e.facing = next.dirX;
         }
       }
+    }
 
-      // 4. 定期チェック周期でのハシゴ高さ合わせ
-      e.foremanCheckTick = (e.foremanCheckTick + 1) % C.FOREMAN_CHECK_INTERVAL;
-      if (e.foremanCheckTick === 0 && e.mode === 'ladder') {
-        const pCol = stage.wrapCol(stage.colAt(player.x));
-        if (pCol === e.ladderCol || d.dx <= C.CELL_W) {
-          const diffY = player.y - e.y;
-          if (Math.abs(diffY) <= 2) {
-            e.dirY = 0;
-          } else {
-            e.dirY = diffY < 0 ? -1 : 1;
-          }
-        }
-      }
-    } else if (e.foremanWalkTimer > 0) {
-      e.foremanWalkTimer--;
-      if (e.foremanWalkTimer === 0) {
-        e.foremanPhase = 'periodic_pause';
-        e.pauseFrames = rollPauseFrames(game);
-      }
+    // 5. ハシゴモード中の高さ合わせ
+    if (e.mode === 'ladder') {
+      updateLadderTracking(stage, e);
     }
   }
 
-  /** イベント駆動の方向判断（Chaser と同じアルゴリズムを流用） */
+  /** イベント駆動の方向判断 */
   function decide(e, event, game) {
-    if (event === 'spawn' && e.foremanWalkTimer <= 0) {
-      e.foremanWalkTimer = rollWalkFrames(game);
+    const stage = game.stage;
+    const player = game.player;
+
+    // スポーン時・スタン終了時・画面端ループ通過時は即座に目標座標を取得
+    if (event === 'spawn' || event === 'stun_end' || event === 'screen_wrap') {
+      samplePlayerTarget(e, player);
+      return decideGroundAction(stage, e);
     }
-    if (RK.ChaserAI && RK.ChaserAI.decide) {
-      return RK.ChaserAI.decide(e, event, game);
+
+    // 通常落下着地時は targetX = 0 にリセットされるため、樽の有無に関わらず左へ進む
+    if (event === 'land') {
+      e.foremanTargetX = 0;
+      e.foremanTargetY = e.y;
+      e.foremanThinkTimer = C.FOREMAN_THINK_FRAMES;
+      e.foremanLadderWobble = 0;
+      return decideGroundAction(stage, e);
     }
+
+    // 樽にぶつかったときは反転せず立ち止まる
+    if (event === 'blocked') {
+      e.needsReeval = false;
+      return { dirX: 0, dirY: 0 };
+    }
+
+    // ハシゴ上の節目イベント（床高さ到達・ハシゴ上下端到達）
+    if (event === 'ladder_floor') {
+      // 行き止まりハシゴのてっぺんに着いたら1段降りる
+      if (isAtLadderDeadEnd(stage, e)) {
+        if (RK.ChaserAI && RK.ChaserAI.canClimbDownAt && RK.ChaserAI.canClimbDownAt(stage, e.ladderCol, e.y)) {
+          return { dirX: 0, dirY: 1 };
+        }
+      }
+
+      const span = RK.Physics.ladderSpan(stage, e.ladderCol, e.dirY > 0 ? e.y + 1 : e.y) ||
+        RK.Physics.ladderSpan(stage, e.ladderCol, e.y);
+      const atBottomEnd = !!span && e.y >= span.bottom && e.dirY > 0;
+      const targetY = e.foremanTargetY !== null ? e.foremanTargetY : e.y;
+
+      // ハシゴ下端に突き当たった場合
+      if (atBottomEnd && RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
+        const isHorizontal = (e.y === targetY);
+        const atTargetX = e.foremanTargetX !== null &&
+          Math.abs(e.foremanTargetX - e.x) <= C.FOREMAN_ARRIVE_TOLERANCE;
+        if (isHorizontal || atTargetX) {
+          // プレイヤーと水平、または目標X到達済みで下端に着地したときはその場で一拍静止する
+          e.foremanThinkTimer = C.FOREMAN_THINK_FRAMES;
+          e.needsReeval = false;
+          return { dirX: 0, dirY: 0 };
+        }
+        return decideGroundAction(stage, e);
+      }
+
+      // ハシゴの途中で床の高さに到達し、目標Yと一致していれば止まらず横へ歩き出す
+      if (Math.abs(targetY - e.y) <= 1 && RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
+        return decideGroundAction(stage, e);
+      }
+
+      return null;
+    }
+
+    // 地上歩行中のセル中心到達（記憶済みの目標座標に従ってハシゴ乗降や到着停止を判定）
+    if (event === 'cell_center') {
+      return decideGroundAction(stage, e);
+    }
+
     return null;
   }
 
   RK.ForemanAI = Object.freeze({
     decide,
     onTick,
+    samplePlayerTarget,
     isBreakableTargetId,
     findBreakableTargetCell,
   });
