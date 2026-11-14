@@ -2,14 +2,15 @@
  * 仕様に基づく決定的な追跡・破壊AI:
  *   1. ゲーム中最速（FOREMAN_SPEED = 1.1）で Chaser と同じ追跡ルールで移動（加速なし）。
  *   2. 移動開始から 4.0〜6.0s（240〜360 tick）経つと 0.6〜1.2s（36〜72 tick）立ち止まり、
- *      動き出す瞬間に方向転換トリガー（フル再評価）が働く。
- *   3. 4tick周期の荒いチェック＋生座標 (x, y) 追尾:
- *      - 平地ではタイミングの噛み合わせによりプレイヤー横で止まることも、判定枠を抜けて追い抜くこともある。
+ *      動き出す瞬間に方向転換トリガー（フル再評価）が働く（プレイヤー至近距離では暴発を抑制）。
+ *   3. 2tick周期のチェック＋生座標 (x, y) 追尾:
+ *      - 平地ではタイミングの噛み合わせによりプレイヤー横で止まることも、すれ違い・追い抜きも起きる。
  *      - ハシゴ上ではプレイヤーの生の y 座標へ合わせようとするため、速度の端数と周期のズレにより
- *        数ドット上下に揺れてから止まる（フラフラする）人間味のある動きが自然に発生する。
+ *        数ドット上下に揺れてから止まる人間味のある動きが自然に発生する。
  *   4. プレイヤーのグリッドに辿り着き、そこに壊せる壁（W/w/V）または壊せる梯子（L）があり親方もそこにいるとき、
- *      0.3〜0.8s（18〜48 tick）立ち止まる。
- *      その直後も振り判定範囲内にいればハンマーを1回振り下ろし、さらに 1.0s（60 tick）後に再判定。
+ *      対象セルをロックして 0.3〜0.8s（18〜48 tick）立ち止まる。
+ *      停止明けに対象が残っていれば最低1回は必ずハンマーを振り下ろし、さらに 1.0s（60 tick）後に
+ *      プレイヤーがまだ判定範囲内かつ対象が残っていれば続けて振り下ろす。
  *      判定外・対象なしになれば方向転換トリガーを発動して歩き出す。
  *   5. 扉(D)・爆弾(B)・鉄柱(I)・壊せない梯子(H)は壊せず、ハンマーを振りもしない。
  */
@@ -90,6 +91,7 @@
   /** 方向転換トリガーを発動して歩き出す */
   function triggerTurnAndResume(e, game) {
     e.foremanPhase = 'patrol';
+    e.foremanLockedTarget = null;
     e.pauseFrames = 0;
     e.needsReeval = true;
     if (e.foremanWalkTimer <= 0) {
@@ -107,8 +109,9 @@
       e.foremanWalkTimer = rollWalkFrames(game);
     }
 
-    // 異常落下中または着地スタン中はタイマー進行のみリセットして待機
+    // 異常落下中・通常落下中・着地スタン中はロックを解除して待機
     if (e.mode === 'abnormal_fall' || e.mode === 'fall' || e.stunFrames > 0) {
+      e.foremanLockedTarget = null;
       return;
     }
 
@@ -121,60 +124,87 @@
       return;
     }
 
-    if (e.foremanPhase === 'spot_pause' || e.foremanPhase === 'swing_wait') {
+    if (e.foremanPhase === 'spot_pause') {
       if (e.pauseFrames <= 0) {
-        const target = findBreakableTargetCell(stage, e, player);
-        if (player && target) {
-          const d = playerDelta(e, player);
-          if (d.dx <= C.FOREMAN_SWING_X_RANGE && d.dy <= C.FOREMAN_SWING_Y_RANGE) {
-            swingForemanHammer(e, target, game);
-            e.foremanPhase = 'swing_wait';
-            e.pauseFrames = C.FOREMAN_SWING_INTERVAL_FRAMES;
-            return;
-          }
+        const target = e.foremanLockedTarget || findBreakableTargetCell(stage, e, player);
+        if (target && isBreakableTargetId(stage.idAt(target.col, target.row))) {
+          // 立ち止まった後、1回目は必ず振り下ろす
+          swingForemanHammer(e, target, game);
+          e.foremanLockedTarget = target;
+          e.foremanPhase = 'swing_wait';
+          e.pauseFrames = C.FOREMAN_SWING_INTERVAL_FRAMES;
+          return;
         }
-        // 判定範囲外に出た、または対象が壊れきった場合は方向転換トリガー発動
+        // 対象がすでに壊れきっていた場合は方向転換トリガー発動
         triggerTurnAndResume(e, game);
       }
       return;
     }
 
-    // 2. patrol（通常移動中）のカウントダウン
-    if (e.foremanWalkTimer > 0) {
+    if (e.foremanPhase === 'swing_wait') {
+      if (e.pauseFrames <= 0) {
+        const locked = e.foremanLockedTarget;
+        const target = (locked && isBreakableTargetId(stage.idAt(locked.col, locked.row)))
+          ? locked
+          : findBreakableTargetCell(stage, e, player);
+        if (player && target) {
+          const d = playerDelta(e, player);
+          if (d.dx <= C.FOREMAN_SWING_X_RANGE && d.dy <= C.FOREMAN_SWING_Y_RANGE) {
+            swingForemanHammer(e, target, game);
+            e.foremanLockedTarget = target;
+            e.foremanPhase = 'swing_wait';
+            e.pauseFrames = C.FOREMAN_SWING_INTERVAL_FRAMES;
+            return;
+          }
+        }
+        // プレイヤーが離脱した、または対象が壊れきった場合は方向転換トリガー発動
+        triggerTurnAndResume(e, game);
+      }
+      return;
+    }
+
+    // 2. プレイヤー接近判定（プレイヤーと対象が同位置なら、定期立ち止まりより優先して即座に停止）
+    if (player) {
+      const d = playerDelta(e, player);
+      if (d.dx <= C.FOREMAN_ALIGN_X_RANGE && d.dy <= C.FOREMAN_ALIGN_Y_RANGE) {
+        const target = findBreakableTargetCell(stage, e, player);
+        if (target) {
+          e.foremanLockedTarget = target;
+          e.foremanPhase = 'spot_pause';
+          e.pauseFrames = rollSpotFrames(game);
+          return;
+        }
+      }
+
+      // 3. patrol（通常移動中）のカウントダウン（プレイヤー至近距離では巡回小休止を抑制）
+      const nearPlayer = (d.dx <= C.CELL_W * 2 && d.dy <= C.FOREMAN_ALIGN_Y_RANGE);
+      if (!nearPlayer && e.foremanWalkTimer > 0) {
+        e.foremanWalkTimer--;
+        if (e.foremanWalkTimer === 0) {
+          e.foremanPhase = 'periodic_pause';
+          e.pauseFrames = rollPauseFrames(game);
+          return;
+        }
+      }
+
+      // 4. 定期チェック周期でのハシゴ高さ合わせ
+      e.foremanCheckTick = (e.foremanCheckTick + 1) % C.FOREMAN_CHECK_INTERVAL;
+      if (e.foremanCheckTick === 0 && e.mode === 'ladder') {
+        const pCol = stage.wrapCol(stage.colAt(player.x));
+        if (pCol === e.ladderCol || d.dx <= C.CELL_W) {
+          const diffY = player.y - e.y;
+          if (Math.abs(diffY) <= 2) {
+            e.dirY = 0;
+          } else {
+            e.dirY = diffY < 0 ? -1 : 1;
+          }
+        }
+      }
+    } else if (e.foremanWalkTimer > 0) {
       e.foremanWalkTimer--;
       if (e.foremanWalkTimer === 0) {
         e.foremanPhase = 'periodic_pause';
         e.pauseFrames = rollPauseFrames(game);
-        return;
-      }
-    }
-
-    // 3. 荒い周期（FOREMAN_CHECK_INTERVAL = 4tickごと）での接近判定＆ハシゴ高さ合わせ
-    e.foremanCheckTick = (e.foremanCheckTick + 1) % C.FOREMAN_CHECK_INTERVAL;
-    if (e.foremanCheckTick !== 0 || !player) return;
-
-    // プレイヤーの位置合わせ判定範囲内かつ壊せる壁/ハシゴがあるなら立ち止まる（0.3〜0.8s）
-    const d = playerDelta(e, player);
-    if (d.dx <= C.FOREMAN_ALIGN_X_RANGE && d.dy <= C.FOREMAN_ALIGN_Y_RANGE) {
-      const target = findBreakableTargetCell(stage, e, player);
-      if (target) {
-        e.foremanPhase = 'spot_pause';
-        e.pauseFrames = rollSpotFrames(game);
-        return;
-      }
-    }
-
-    // ハシゴ上のとき、プレイヤーが同じハシゴ付近にいるならプレイヤーの生y座標へ高さを合わせる
-    // （速度の端数と4tick周期のズレにより、数ドット上下にフラフラ揺れて止まる挙動が自然に起きる）
-    if (e.mode === 'ladder') {
-      const pCol = stage.wrapCol(stage.colAt(player.x));
-      if (pCol === e.ladderCol || d.dx <= C.CELL_W) {
-        const diffY = player.y - e.y;
-        if (Math.abs(diffY) <= 2) {
-          e.dirY = 0;
-        } else {
-          e.dirY = diffY < 0 ? -1 : 1;
-        }
       }
     }
   }
