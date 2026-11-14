@@ -1,5 +1,5 @@
 /* ヘッドレステスト: node tests/run.js
- * DOM を使わない部分（config / stage / input / loop / physics / player / game）を Node の vm に読み込んで確認する。
+ * DOM を使わない部分（config / stage / input / loop / physics / player / enemy / ai / game）を Node の vm に読み込んで確認する。
  * 新しいステップを作るたびに、そのルールのテストをここに足していく。 */
 const vm = require('vm');
 const fs = require('fs');
@@ -11,7 +11,8 @@ sandbox.window = sandbox;
 vm.createContext(sandbox);
 [
   'js/config.js', 'js/stage/symbols.js', 'js/stage/stage.js', 'js/data/stages/stage01.js',
-  'js/core/input.js', 'js/core/loop.js', 'js/physics/terrain.js', 'js/entities/player.js', 'js/core/game.js',
+  'js/core/input.js', 'js/core/loop.js', 'js/physics/terrain.js',
+  'js/entities/player.js', 'js/entities/enemy.js', 'js/ai/chaser.js', 'js/core/game.js',
 ].forEach((f) => vm.runInContext(fs.readFileSync(path.join(root, f), 'utf8'), sandbox, { filename: f }));
 const RK = sandbox.RK;
 const C = RK.CONFIG;
@@ -33,7 +34,6 @@ function mkStage(floor, objects) {
   return { name: 'test', floor: layer(floor), objects: layer(objects) };
 }
 const FULL = '='.repeat(16);
-// 平らな地面だけ。P は (col1,row8) = x24,y216
 const FLAT = mkStage({ 8: FULL }, { 8: '.P..............' });
 
 /** テスト用ハーネス。1tick = 入力イベントを流して poll して Game.update */
@@ -112,7 +112,6 @@ test('チョン中に逆方向を押すと、新しい向きでやり直す', ()
   const t = setup(); const x0 = t.p.x;
   t.press('right'); t.tick(2); t.release('right');
   t.press('left'); t.tick(1); t.release('left'); t.tick(20);
-  // 右へ2tick分 + 左へ TAP_DOTS
   const right = Math.floor((2 * C.PLAYER_TAP_DOTS) / C.PLAYER_TAP_FRAMES);
   eq(t.p.x - x0, right - C.PLAYER_TAP_DOTS, '移動量');
   eq(t.p.facing, -1, 'facing');
@@ -137,14 +136,11 @@ test('足場の上を歩いても y（足）は動かない', () => {
 });
 
 console.log('Player: 画面端の左右ループ（ステップ6）');
-// 床が row6 の左端(col0)だけ / 右端(col15)だけ。足場判定が端をまたぐかを見る
 const WRAP_FLOOR_L0 = mkStage({ 6: '=...............' }, { 6: '.P..............' });
 const WRAP_FLOOR_R15 = mkStage({ 6: '...............=' }, { 6: '.P..............' });
-// 床が row6 の col0 と col15 だけ。P は col0 に立つ = x8,y168（端をまたいで歩いても落ちないかを見る）
 const WRAP_FLOOR_BOTH = mkStage({ 6: '=..............=' }, { 6: 'P...............' });
-// 樽が右端(col15)だけ / 左端(col0)だけ。反対の端から来ても通れないかを見る
-const WRAP_BARREL_R15 = mkStage({ 8: FULL }, { 8: '.P.............O' });   // P x24 が左へ歩く
-const WRAP_BARREL_L0 = mkStage({ 8: FULL }, { 8: 'O.............P.' });    // P x232 が右へ歩く
+const WRAP_BARREL_R15 = mkStage({ 8: FULL }, { 8: '.P.............O' });
+const WRAP_BARREL_L0 = mkStage({ 8: FULL }, { 8: 'O.............P.' });
 
 test('wrapX: 範囲外の位置を 0〜WIDTH-1 に収める', () => {
   const wx = RK.Physics.wrapX;
@@ -173,12 +169,12 @@ test('何周しても中心x は 0〜WIDTH-1 に収まる', () => {
 });
 test('体が右端をまたぐと、反対側(左端 col0)の床にも立てる（x=251 で立てる / x=250 は立てない）', () => {
   const s = setup(WRAP_FLOOR_L0).game.stage;
-  eq(RK.Physics.isSupported(s, 251, 168, 12), true, 'x=251 右端が床の最初の1ドット(256=0)');
+  eq(RK.Physics.isSupported(s, 251, 168, 12), true, 'x=251');
   eq(RK.Physics.isSupported(s, 250, 168, 12), false, 'x=250');
 });
 test('体が左端をまたぐと、反対側(右端 col15)の床にも立てる（x=5 で立てる / x=6 は立てない）', () => {
   const s = setup(WRAP_FLOOR_R15).game.stage;
-  eq(RK.Physics.isSupported(s, 5, 168, 12), true, 'x=5 左端が床の最後の1ドット(-1=255)');
+  eq(RK.Physics.isSupported(s, 5, 168, 12), true, 'x=5');
   eq(RK.Physics.isSupported(s, 6, 168, 12), false, 'x=6');
 });
 test('左端の床から端をまたいで右端の床へ歩いても、落ちない', () => {
@@ -202,7 +198,7 @@ test('端の樽の手前では反対向きに歩ける', () => {
 });
 test('梯子につかまる範囲は端で折り返さない（右端の x=255 から左端の梯子には乗れない）', () => {
   const s = setup(mkStage({ 8: FULL }, { 8: 'L...P...........' })).game.stage;
-  eq(RK.Physics.ladderColAt(s, 8, 8), 0, 'x=8（col0 の中心）');
+  eq(RK.Physics.ladderColAt(s, 8, 8), 0, 'x=8');
   eq(RK.Physics.ladderColAt(s, C.WIDTH - 1, 8), -1, 'x=255');
 });
 
@@ -234,13 +230,11 @@ test('W は1回、w は2回、V は3回叩くと壊れる。壊れても床は�
     t.press('hammer'); t.tick(1); t.release('hammer');
     t.tick(C.HAMMER_COOLDOWN_FRAMES);
   };
-  // col3 (x=56) の W（耐久1）
   t.p.x = 56;
   hitOnce();
   eq(t.game.stage.idAt(3, 8), 'empty', 'W 1回目で破壊');
   eq(t.game.stage.hasFloor(3, 8), true, '床は残る');
 
-  // col4 (x=72) の w（耐久2）
   t.p.x = 72;
   hitOnce();
   eq(t.game.stage.idAt(4, 8), 'wall_b', 'w 1回目は残る');
@@ -248,14 +242,12 @@ test('W は1回、w は2回、V は3回叩くと壊れる。壊れても床は�
   hitOnce();
   eq(t.game.stage.idAt(4, 8), 'empty', 'w 2回目で破壊');
 
-  // col5 (x=88) の V（耐久3）
   t.p.x = 88;
   hitOnce(); eq(t.game.stage.hpAt(5, 8), 2, 'V 1回目後');
   hitOnce(); eq(t.game.stage.hpAt(5, 8), 1, 'V 2回目後');
   hitOnce(); eq(t.game.stage.idAt(5, 8), 'empty', 'V 3回目で破壊');
 });
 test('画面奥の自分の中心がある1セルだけが叩かれ、隣の壁は同時破壊・ダメージを受けない', () => {
-  // col3 (x48..63) と col4 (x64..79) に W が並んでいる。境界ギリギリの x=63（中心は col3）で叩く
   const t = setup(mkStage({ 8: FULL }, { 8: '.P.WW...........' }));
   t.p.x = 63;
   t.press('hammer'); t.tick(1); t.release('hammer');
@@ -268,11 +260,9 @@ test('振ったあと HAMMER_LOCK_FRAMES(18tick = 0.3s) は歩行・梯子乗り
   t.p.x = 24;
   t.press('hammer'); t.tick(1); t.release('hammer');
   eq(t.p.hammerLockFrames, C.HAMMER_LOCK_FRAMES, 'ロック開始');
-  // ロック中に右移動・上入力(梯子)を入れても動かない
   t.press('right'); t.press('up');
   t.tick(C.HAMMER_LOCK_FRAMES - 1);
   eq(t.p.x, 24, 'ロック中は動かない'); eq(t.p.mode, 'ground', 'ロック中は梯子に乗らない');
-  // 18tick経過後（19tick目）から動ける
   t.release('up'); t.tick(1);
   eq(t.p.hammerLockFrames, 0, 'ロック解除');
   eq(t.p.x > 24, true, 'ロック解除後に歩く x=' + t.p.x);
@@ -288,15 +278,13 @@ test('チョン移動中にハンマーを振ると即座に停止し、硬直�
 });
 test('ハンマークールタイム(HAMMER_COOLDOWN_FRAMES)中は連打しても次の壁を叩けない', () => {
   const t = setup(mkStage({ 8: FULL }, { 8: '.P.w............' }));
-  t.p.x = 56; // col3 の w（耐久2）
+  t.p.x = 56;
   t.press('hammer'); t.tick(1); t.release('hammer');
   eq(t.game.stage.hpAt(3, 8), 1, '1回目ヒット');
-  // クールタイム中に連打しても当たらない
   for (let i = 0; i < 5; i++) {
     t.tick(1); t.press('hammer'); t.tick(1); t.release('hammer');
   }
   eq(t.game.stage.hpAt(3, 8), 1, 'クールタイム中はダメージなし');
-  // クールタイム明けまで待ってから叩くと壊れる
   t.tick(C.HAMMER_COOLDOWN_FRAMES);
   t.press('hammer'); t.tick(1); t.release('hammer');
   eq(t.game.stage.idAt(3, 8), 'empty', 'クールタイム明けの2回目で破壊');
@@ -305,17 +293,14 @@ test('歩行クールタイムとハンマークールタイムは独立して�
   const t = setup(mkStage({ 8: FULL }, { 8: '.P.w............' }));
   t.p.x = 56;
   t.press('hammer'); t.tick(1); t.release('hammer');
-  // 歩行ロックだけ先に解除された状態を模擬
   t.p.hammerLockFrames = 0;
   t.press('right'); t.tick(1); t.release('right');
   eq(t.p.x > 56, true, '歩行ロックが0なら歩ける');
-  // まだハンマークールタイムが残っているならハンマーは振れない
   t.p.x = 56;
   t.press('hammer'); t.tick(1); t.release('hammer');
   eq(t.game.stage.hpAt(3, 8), 1, 'ハンマークールタイムが残っていれば振れない');
 });
 test('歩行可能な状態(ground)以外ではハンマーを振れない（通常落下中・梯子中）', () => {
-  // 梯子上の壁
   const lad2 = setup(mkStage({ 6: '====.===========', 8: FULL }, { 7: '....L...........', 8: '.P..L...........' }));
   lad2.p.x = 72;
   lad2.press('up'); lad2.tick(5); lad2.release('up');
@@ -324,11 +309,9 @@ test('歩行可能な状態(ground)以外ではハンマーを振れない（通
   eq(lad2.p.hammerFrames, 0, '梯子中は振れない');
   eq(lad2.p.hammerLockFrames, 0, '梯子中はロックも発生しない');
 
-  // 通常落下中
   const fallSt = setup(mkStage({ 8: FULL }, { 6: '....P...........', 7: '....W...........' }));
   fallSt.tick(1);
   eq(fallSt.p.mode, 'fall', '落下中');
-  // 落下しながら row7 col4 の W を通過する間にハンマーを押しても振れず壁も無傷
   for (let i = 0; i < 15; i++) {
     fallSt.press('hammer'); fallSt.tick(1); fallSt.release('hammer');
   }
@@ -337,8 +320,6 @@ test('歩行可能な状態(ground)以外ではハンマーを振れない（通
 });
 
 console.log('Player: 異常落下（ステップ8a）');
-// 多段ステージ: row2(y=72), row4(y=120), row6(y=168), row8(y=216) に床。
-// col4 は途中の段(row4)に樽があり、col6 は一番下の床(row8)に樽がある。
 const ABNORMAL_STAGE = mkStage(
   { 2: FULL, 4: FULL, 6: FULL, 8: FULL },
   { 2: '..P.............', 4: '....O...........', 8: '......O.........' }
@@ -349,7 +330,6 @@ test('異常落下: 途中の床をすべてすり抜け、一番下の床(y=216
   RK.Player.startAbnormalFall(t.p);
   eq(t.p.mode, 'abnormal_fall', 'mode');
   eq(t.p.invincible, true, '落下開始時に無敵');
-  // y=72 から y=216 まで 144ドット = 72tick（途中の y=120, y=168 の床を素通りする）
   t.tick(71);
   eq(t.p.mode, 'abnormal_fall', '71tick後はまだ落下中');
   eq(t.p.y, 214, 'y=214');
@@ -361,7 +341,6 @@ test('異常落下: 途中の床をすべてすり抜け、一番下の床(y=216
   eq(t.p.stunFrames, C.PLAYER_ABNORMAL_LAND_STUN_FRAMES, '着地硬直開始');
 });
 test('異常落下: 途中の段にある樽もすり抜け、一番下の床の上に乗っている樽の上面(y=192)で停止する', () => {
-  // 途中の段(row4)の樽の上(col4, x=72, y=72)から異常落下 → row4の樽をすり抜けてy=216まで落ちる
   const a = setup(ABNORMAL_STAGE);
   a.p.x = 72; a.p.y = 72;
   RK.Player.startAbnormalFall(a.p);
@@ -369,11 +348,10 @@ test('異常落下: 途中の段にある樽もすり抜け、一番下の床の
   eq(a.p.y, 216, '途中の段の樽はすり抜けて一番下の床へ');
   eq(a.p.mode, 'ground', 'mode');
 
-  // 一番下の床(row8)の樽の真上(col6, x=104, y=72)から異常落下 → y=192(樽の上面)で停止
   const b = setup(ABNORMAL_STAGE);
   b.p.x = 104; b.p.y = 72;
   RK.Player.startAbnormalFall(b.p);
-  b.tick(60); // 120ドット = 60tick で y=192
+  b.tick(60);
   eq(b.p.y, 192, '一番下の床の樽の上面で停止');
   eq(b.p.mode, 'ground', 'mode');
   eq(b.p.invincible, false, '着地後即座に無敵解除');
@@ -382,15 +360,13 @@ test('異常落下: 途中の段にある樽もすり抜け、一番下の床の
 test('異常落下: 着地後 0.5s(PLAYER_ABNORMAL_LAND_STUN_FRAMES = 30tick) は一切動けず、経過後に動ける', () => {
   const t = setup(ABNORMAL_STAGE);
   RK.Player.startAbnormalFall(t.p);
-  t.tick(72); // 着地 tick（この時点で stunFrames = 30）
+  t.tick(72);
   eq(t.p.y, 216, '着地');
   const xLand = t.p.x;
-  // 硬直中（29tick間）は左右移動・ハンマー・梯子すべて不可
   t.press('right'); t.press('hammer');
   t.tick(C.PLAYER_ABNORMAL_LAND_STUN_FRAMES - 1);
   eq(t.p.x, xLand, '硬直中は動けない');
   eq(t.p.hammerFrames, 0, '硬直中はハンマーも振れない');
-  // 30tick経過した次のtickから動ける
   t.release('hammer'); t.tick(1);
   eq(t.p.stunFrames, 0, '硬直解除');
   eq(t.p.x > xLand, true, '硬直解除後に動ける x=' + t.p.x);
@@ -400,7 +376,7 @@ test('異常落下中は左右移動・梯子つかまり・ハンマー攻撃�
     { 4: FULL, 8: FULL },
     { 4: '.P..L...........', 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '....L...........' }
   ));
-  t.p.x = 72; // 梯子と同じ列
+  t.p.x = 72;
   RK.Player.startAbnormalFall(t.p);
   t.press('right'); t.press('up'); t.press('hammer');
   t.tick(10);
@@ -423,12 +399,274 @@ test('梯子昇降中やチョン移動中から異常落下に入っても状�
   eq(t.p.invincible, true, '無敵ON');
 });
 
+console.log('Enemy: 共通土台（ステップ8b-1）');
+test('ステージの 1,2,3,4 が敵としてスポーンし game.enemies / game.actors に入る', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: 'P.1.2.3.4.......' }));
+  eq(t.game.enemies.length, 4, 'enemies数');
+  eq(t.game.actors.length, 5, 'actors数（プレイヤー+敵4）');
+  eq(t.game.enemies[0].id, 'chaser', '1');
+  eq(t.game.enemies[1].id, 'runner', '2');
+  eq(t.game.enemies[2].id, 'foreman', '3');
+  eq(t.game.enemies[3].id, 'fast_chaser', '4');
+});
+test('敵は樽にぶつかると反転し、画面端では左右ループする', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: 'P..1..O.........' }));
+  const e = t.game.enemies[0];
+  eq(e.x, 56, 'x0');
+  t.tick(45); // 右へ進み col6 の樽の手前でぶつかって左へ反転
+  eq(e.facing, -1, '樽で左へ反転');
+  eq(e.x < 90, true, '反転して左へ進む x=' + e.x);
+  t.tick(120);
+  eq(e.x > 200, true, '左端から右端へループ x=' + e.x);
+});
+test('AI判断は毎フレームではなく、セル中心(cell_center)の節目でのみ呼ばれる', () => {
+  const events = [];
+  RK.Enemy.registerAI('runner', (e, ev) => {
+    events.push({ ev, x: e.x });
+    return { dirX: 1, dirY: 0 };
+  });
+  try {
+    const t = setup(mkStage({ 8: FULL }, { 8: 'P.2.............' }));
+    eq(events.length, 1, 'spawn時');
+    eq(events[0].ev, 'spawn', 'event=spawn');
+    // ENEMY_SPEED = 0.8 の場合、16ドット進むには 20tick かかる
+    t.tick(19);
+    eq(events.length, 1, '途中では呼ばれない');
+    t.tick(1);
+    eq(events.length, 2, 'セル中心到達で1回呼ばれる');
+    eq(events[1].ev, 'cell_center', 'event=cell_center');
+    eq(events[1].x, 56, 'x=56');
+  } finally {
+    RK.Enemy.registerAI('runner', null);
+  }
+});
+test('AIが梯子方向(dirY=-1)を返すと梯子モードに入り、床の高さ(ladder_floor)の節目で判断が呼ばれる', () => {
+  RK.Enemy.registerAI('runner', (e, ev) => {
+    if (ev === 'spawn') return { dirX: 1, dirY: 0 };
+    if (ev === 'cell_center' && e.x === 72) return { dirX: 0, dirY: -1 };
+    if (ev === 'ladder_floor' && e.y === 168) return { dirX: 1, dirY: 0 };
+    return null;
+  });
+  try {
+    const t = setup(mkStage(
+      { 6: FULL, 8: FULL },
+      { 7: '....L...........', 8: 'P.2.L...........' }
+    ));
+    const e = t.game.enemies[0];
+    // col2(x=40) から col4(x=72) まで32ドット(40tick)歩き、その後48tick昇って y=168 の床へ降りる
+    t.tick(40 + 48 + 10);
+    eq(e.mode, 'ground', '上の床へ降りた');
+    eq(e.y, 168, 'y=168');
+    eq(e.x > 72, true, '上の床を右へ歩いている x=' + e.x);
+  } finally {
+    RK.Enemy.registerAI('runner', null);
+  }
+});
+test('通常落下着地時、通常敵はスタン＆速度段階上昇するが、親方(foreman)はスタンしない', () => {
+  const t = setup(mkStage(
+    { 6: '===.===.........', 8: FULL },
+    { 6: '.1..3...........', 8: 'P...............' }
+  ));
+  const chaser = t.game.enemies[0];
+  const foreman = t.game.enemies[1];
+  t.tick(80);
+  eq(chaser.y, 216, 'chaser着地');
+  eq(foreman.y, 216, 'foreman着地');
+  eq(chaser.stunFrames > 0, true, 'chaserは着地後にスタンする');
+  eq(chaser.speedBoost, 1, 'chaserは落下経験でspeedBoost上昇');
+  eq(foreman.stunFrames, 0, 'foremanはスタンしない');
+  eq(foreman.speedBoost, 0, 'foremanはspeedBoost対象外');
+});
+test('敵の異常落下: 途中の床をすり抜け一番下の床まで落下（落下中は無敵、着地で即無敵解除）', () => {
+  const t = setup(mkStage(
+    { 4: FULL, 6: FULL, 8: FULL },
+    { 4: '..1.............', 8: 'P...............' }
+  ));
+  const e = t.game.enemies[0];
+  RK.Enemy.startAbnormalFall(e);
+  eq(e.mode, 'abnormal_fall', 'abnormal_fall');
+  eq(e.invincible, true, '落下中は無敵');
+  t.tick(60);
+  eq(e.y, 216, '一番下の床まで落下');
+  eq(e.mode, 'ground', 'ground復帰');
+  eq(e.invincible, false, '着地と同時に無敵解除');
+  eq(e.stunFrames > 0, true, '通常敵は着地後スタン');
+});
+
+console.log('Chaser & Fast Chaser AI（ステップ8b-2）');
+test('§3-1/3-2: 同じ高さにいる場合、プレイヤーの方向（右/左）へ追跡する', () => {
+  const a = setup(mkStage({ 8: FULL }, { 8: '.1........P.....' }));
+  eq(a.game.enemies[0].dirX, 1, 'プレイヤーが右なら右へ進む');
+  const b = setup(mkStage({ 8: FULL }, { 8: '.P........1.....' }));
+  eq(b.game.enemies[0].dirX, -1, 'プレイヤーが左なら左へ進む');
+});
+test('§3-4 / 不変条件7: 同じ高さの樽がプレイヤーとの間にある場合は追跡方向を反転する', () => {
+  const a = setup(mkStage({ 8: FULL }, { 8: '.1...O....P.....' }));
+  eq(a.game.enemies[0].dirX, -1, '右にプレイヤー、間に樽 → 左へ反転');
+
+  const b = setup(mkStage({ 8: FULL }, { 8: '.P...O....1.....' }));
+  eq(b.game.enemies[0].dirX, 1, '左にプレイヤー、間に樽 → 右へ反転');
+
+  // 同じ高さに樽があっても、プレイヤーとの間でなければ反転しない
+  const c = setup(mkStage({ 8: FULL }, { 8: 'O.1.......P.....' }));
+  eq(c.game.enemies[0].dirX, 1, '外側にある樽では反転しない');
+});
+test('§2 / 不変条件2,3: 平地歩行中はプレイヤーが移動・高さ変化しても追跡方針を再判定しない', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.......1..P.....' }));
+  const e = t.game.enemies[0];
+  eq(e.dirX, 1, '開始時は右');
+  // プレイヤーがチェイサーの左側へワープし、高さも変えても、梯子がない平地では右へ進み続ける
+  t.p.x = 16;
+  t.p.y = 168;
+  t.tick(25);
+  eq(e.dirX, 1, '平地では方向を維持し続ける');
+  eq(e.x > 120, true, '右へ進んでいる x=' + e.x);
+});
+test('§4-1 / §2-3: 異なる高さで梯子のマスに到達すると登って上のプレイヤーを追う', () => {
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '..........P.....', 7: '.....L..........', 8: '..1..L..........' }
+  ));
+  const e = t.game.enemies[0];
+  eq(e.dirX, 1, '右の梯子へ向かう');
+  // col2(x=40) から col5(x=88) まで48ドット(60tick)歩き、梯子を48tick昇る
+  t.tick(60 + 55);
+  eq(e.y, 168, '上の床へ到達');
+  eq(e.mode, 'ground', '上の床へ降りた');
+  eq(e.dirX, 1, '上の床で右のプレイヤーへ向かう');
+});
+test('§4-2 / §2-3: プレイヤーが下にいる場合、梯子の直上のマスから降りて追う（1段下接続も有効）', () => {
+  const t = setup(mkStage(
+    { 4: FULL, 6: '===.============', 8: FULL },
+    { 4: '..........P.....', 7: '.....L..........', 8: '.....L..........' }
+  ));
+  // P を一番下の段 (y=216) に置き、チェイサーを中段 (col2, y=168) に置く
+  t.p.x = 168; t.p.y = 216;
+  const e = RK.Enemy.create(t.game.stage, { id: 'chaser', col: 2, row: 6 });
+  t.game.enemies.push(e);
+  t.game.actors.push(e);
+  RK.Enemy.triggerAI(e, 'spawn', t.game);
+
+  eq(e.dirX, 1, '右の梯子直上(col5)へ向かう');
+  t.tick(60 + 55);
+  eq(e.y, 216, '下の床へ降りた');
+  eq(e.mode, 'ground', 'ground');
+  eq(e.dirX, 1, 'プレイヤー方向(右)へ進む');
+});
+test('§4-2: 上に隣接しているだけで接続されていない梯子は登れる梯子として扱わない', () => {
+  // row8 に床、row7 に L があるが row8 に L がなく足元から接続されていない
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '.....P..........', 7: '.....L..........', 8: '..1.............' }
+  ));
+  const e = t.game.enemies[0];
+  eq(RK.ChaserAI.canClimbUpAt(t.game.stage, 5, 216, e.w), false, '未接続の梯子は登れない');
+  // 有効な梯子がないため §5 のルール（左に樽なし → 左へ進む）になる
+  eq(e.dirX, -1, '有効梯子なしなので左へ進む');
+});
+test('§4-3 / 不変条件4,5,6: 最短距離の梯子を選び、同距離なら左側優先、画面端ループ距離は使わない', () => {
+  // 1) 同距離なら左側優先: チェイサー col5(x=88), 左梯子 col2(x=40, 距離48), 右梯子 col8(x=136, 距離48)
+  const sameDist = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '.......P........', 7: '..L.....L.......', 8: '..L..1..L.......' }
+  ));
+  eq(sameDist.game.enemies[0].dirX, -1, '同距離なら左側の梯子(col2)を優先');
+
+  // 2) 画面端ループを考慮しない距離比較: チェイサー col1(x=24), 左端梯子 col0(x=8, 距離16), 右端梯子 col15(x=248, 距離224)
+  // もしループ距離なら col15 も距離32だが、非ループ距離で col0(距離16) を選ぶ
+  const noWrapDist = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '.......P........', 7: 'L..............L', 8: 'L1.............L' }
+  ));
+  eq(noWrapDist.game.enemies[0].dirX, -1, '画面端ループ距離は使わず col0 へ進む');
+});
+test('§5 / 不変条件8: 有効な梯子がない場合、左側に同じ高さの樽があれば右へ、なければ左へ進む', () => {
+  // 左側に樽あり → プレイヤーが左にいても右へ進む
+  const withLeftBarrel = setup(mkStage(
+    { 8: FULL },
+    { 6: '.P..............', 8: '.O....1.........' }
+  ));
+  eq(withLeftBarrel.game.enemies[0].dirX, 1, '左に樽があれば右へ');
+
+  // 左側に樽なし（右側に樽あり）→ プレイヤーが右にいても左へ進む
+  const withoutLeftBarrel = setup(mkStage(
+    { 8: FULL },
+    { 6: '..........P.....', 8: '......1....O....' }
+  ));
+  eq(withoutLeftBarrel.game.enemies[0].dirX, -1, '左に樽がなければ左へ');
+});
+test('§6 / 不変条件9: 移動できない場合は反転し、反対方向にも移動できなければ停止する', () => {
+  // 左右を樽に挟まれて動けないケース
+  const trapped = setup(mkStage(
+    { 8: FULL },
+    { 8: '..O1O......P....' }
+  ));
+  const e = trapped.game.enemies[0];
+  eq(e.dirX, 0, '両側を塞がれたら停止');
+  t.tick(10);
+  eq(e.x, 56, 'その場から動かない');
+});
+test('§7 / 不変条件10: 梯子付近で方向選択が循環する場合は停止し、再判定フラグを設定する', () => {
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '..........P.....', 7: '...O.O..........', 8: '...OLO....P.....' }
+  ));
+  // 梯子 col4(x=72) の左右を樽で塞いだ状態で配置
+  const stage = t.game.stage;
+  stage.setId(3, 8, 'barrel');
+  stage.setId(5, 8, 'barrel');
+  const e = RK.Enemy.create(stage, { id: 'chaser', col: 4, row: 8 });
+  RK.Enemy.triggerAI(e, 'spawn', t.game);
+  eq(e.dirX, 0, '梯子付近で両側塞がれたら停止');
+  eq(e.needsReeval, true, '再判定フラグが設定される');
+});
+test('§8: 通常落下後に着地すると追跡方針を再判定し、プレイヤーと同じ高さならプレイヤー方向へ向く', () => {
+  const t = setup(mkStage(
+    { 6: '===.============', 8: FULL },
+    { 6: '.1..............', 8: '..........P.....' }
+  ));
+  const e = t.game.enemies[0];
+  // 穴(col3)へ落ちて着地後、スタンが解けると右のプレイヤーへ向かう
+  t.tick(140);
+  eq(e.y, 216, '着地');
+  eq(e.dirX, 1, '着地後にプレイヤー方向(右)へ向き変更');
+});
+test('§9: 異常落下後はスタン状態になり、スタン終了時に追跡方針を再判定する', () => {
+  const t = setup(mkStage(
+    { 4: FULL, 8: FULL },
+    { 4: '..1.............', 8: '..........P.....' }
+  ));
+  const e = t.game.enemies[0];
+  e.dirX = -1;
+  e.facing = -1;
+  RK.Enemy.startAbnormalFall(e);
+  t.tick(72);
+  eq(e.y, 216, '異常落下着地');
+  eq(e.stunFrames, C.ENEMY_ABNORMAL_LAND_STUN_FRAMES, 'スタン開始');
+  // スタン終了（30〜60tick後）まで進め、スタン終了時にプレイヤー方向（右）へ再判定される
+  t.tick(C.ENEMY_ABNORMAL_LAND_STUN_FRAMES);
+  eq(e.stunFrames, 0, 'スタン終了');
+  eq(e.dirX, 1, 'スタン終了時に追跡方針を再判定して右へ');
+});
+test('§12 / 不変条件12: ファストチェイサーは通常チェイサーと同じ追跡判断を行い、移動速度が速い', () => {
+  const t = setup(mkStage(
+    { 8: FULL },
+    { 8: '.1........P.....' }
+  ));
+  const chaser = t.game.enemies[0];
+  const fast = RK.Enemy.create(t.game.stage, { id: 'fast_chaser', col: 1, row: 8 });
+  t.game.enemies.push(fast);
+  t.game.actors.push(fast);
+  RK.Enemy.triggerAI(fast, 'spawn', t.game);
+
+  eq(chaser.dirX, fast.dirX, '初期判断方向が一致');
+  t.tick(40);
+  eq(fast.x > chaser.x, true, 'ファストチェイサーの方が速く進む fast=' + fast.x + ' chaser=' + chaser.x);
+});
+
 console.log('地形: 足場（床・樽）');
-// 床 row6 に穴(col5..8 = x80..143)。下の row8 は全面の床。P は (col1,row6) = x24,y168
 const HOLE = mkStage({ 6: '=====....=======', 8: FULL }, { 6: '.P..............' });
-// 樽 (col4,row8) = x64..79、上面 y=192。row7 の P はその上に立つ = x72,y192
 const BARREL_TOP = mkStage({ 8: FULL }, { 7: '....P...........', 8: '....O...........' });
-// 樽の真上(row6)に出現（足場なし）→ 落ちて樽の上で止まる
 const BARREL_DROP = mkStage({ 8: FULL }, { 6: '....P...........', 8: '....O...........' });
 
 test('stage01 のスポーン位置は足場の上', () => {
@@ -436,12 +674,12 @@ test('stage01 のスポーン位置は足場の上', () => {
 });
 test('1ドットでも乗っていれば立てる（床の右端）', () => {
   const s = setup(HOLE).game.stage;
-  eq(RK.Physics.isSupported(s, 85, 168, 12), true, 'x=85 左端が床の最後の1ドット(79)');
-  eq(RK.Physics.isSupported(s, 86, 168, 12), false, 'x=86 全部穴の上');
+  eq(RK.Physics.isSupported(s, 85, 168, 12), true, 'x=85');
+  eq(RK.Physics.isSupported(s, 86, 168, 12), false, 'x=86');
 });
 test('1ドットでも乗っていれば立てる（穴の反対側＝床の左端）', () => {
   const s = setup(HOLE).game.stage;
-  eq(RK.Physics.isSupported(s, 139, 168, 12), true, 'x=139 右端が床の最初の1ドット(144)');
+  eq(RK.Physics.isSupported(s, 139, 168, 12), true, 'x=139');
   eq(RK.Physics.isSupported(s, 138, 168, 12), false, 'x=138');
 });
 test('足場面の高さでなければ立っていない', () => {
@@ -457,7 +695,7 @@ test('樽の上面は足場。1ドットでも乗っていれば立てる', () =
   eq(RK.Physics.isSupported(s, 58, 192, 12), false, '左へ外れた');
 });
 test('画面下端は足場として扱う（暫定）', () => {
-  const s = setup(mkStage({}, { 8: '.P..............' })).game.stage; // 床なし
+  const s = setup(mkStage({}, { 8: '.P..............' })).game.stage;
   eq(RK.Physics.isSupported(s, 24, C.HEIGHT, 12), true, 'y=HEIGHT');
 });
 
@@ -466,7 +704,7 @@ test('床の端から外れたら落ちる。全部が穴の上に出る x=86 �
   const t = setup(HOLE);
   t.press('right');
   let n = 0; while (t.p.mode !== 'fall' && n++ < 200) t.tick();
-  eq(t.p.mode, 'fall', 'mode'); eq(t.p.x, 86, 'x'); eq(t.p.y, 168, 'y（まだ落ちていない）');
+  eq(t.p.mode, 'fall', 'mode'); eq(t.p.x, 86, 'x'); eq(t.p.y, 168, 'y');
 });
 test('落下は 1tick = FALL_SPEED ドット。床(y=216)まで 24 tick で止まり、通常移動に戻る', () => {
   const t = setup(HOLE);
@@ -518,16 +756,16 @@ test('樽の上を歩いて端から外れると落ちる（右 x=86 / 左 x=58�
 });
 test('チョンの途中で落ち始めても、着地後に残りのチョンは続かない', () => {
   const t = setup(HOLE);
-  t.p.x = 85;                                  // あと1ドットで落ちる位置
-  t.press('right'); t.tick(1); t.release('right');   // チョン開始（3ドットのうち最初の1tickで0〜1ドット）
+  t.p.x = 85;
+  t.press('right'); t.tick(1); t.release('right');
   t.tick(40);
   const x = t.p.x; t.tick(20); eq(t.p.x, x, '着地後に動き続けない');
   eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 216, 'y');
 });
 
 console.log('Player: 樽にぶつかる（横）');
-const SIDE_L = mkStage({ 8: FULL }, { 8: '.P..O...........' });   // 樽 x64..79。P は樽の左 x24
-const SIDE_R = mkStage({ 8: FULL }, { 8: '....O..P........' });   // P は樽の右 x120
+const SIDE_L = mkStage({ 8: FULL }, { 8: '.P..O...........' });
+const SIDE_R = mkStage({ 8: FULL }, { 8: '....O..P........' });
 test('左から押し続けると樽の手前(x=58)で止まる', () => {
   const t = setup(SIDE_L); t.press('right'); t.tick(200); eq(t.p.x, 58, 'x'); eq(t.p.y, 216, 'y');
 });
@@ -552,19 +790,16 @@ test('頭より上の樽(row7)の下は通れる', () => {
   t.press('right'); t.tick(100); eq(t.p.x > 80, true, 'x=' + t.p.x);
 });
 test('樽に重なって出現しても、樽の外側へは抜けられる', () => {
-  // 出現位置を樽の中に置くステージは作れない（P が樽と同じセルに書けない）ので、後から樽の中へ置く
   const g = setup(mkStage({ 8: FULL }, { 8: '.P..O...........' }));
-  g.p.x = 72;                                  // 樽(64..79)の真ん中
+  g.p.x = 72;
   g.press('left'); g.tick(30); eq(g.p.x < 72, true, '左へ抜ける x=' + g.p.x);
   const h = setup(mkStage({ 8: FULL }, { 8: '.P..O...........' }));
   h.p.x = 72; h.press('right'); h.tick(30); eq(h.p.x > 72, true, '右へ抜ける x=' + h.p.x);
 });
 
 console.log('梯子');
-// 梯子は col4（x64..79、中心72）の row7,8。上の足場面 y=168（row6 の下端）の床に col4 の穴。下の足場面は y=216
 const LADDER_OBJ = { 7: '....L...........', 8: '.P..L...........' };
 const LADDER = mkStage({ 6: '====.===========', 8: FULL }, LADDER_OBJ);
-// 同じ梯子で、P は上の段（row6）に立つ = x24,y168
 const LADDER_UP = mkStage({ 6: '====.===========', 8: FULL }, { 6: '.P..............', 7: '....L...........', 8: '....L...........' });
 const holdUntil = (t, cond, max) => { let n = 0; while (!cond() && n++ < (max || 300)) t.tick(); return n; };
 
@@ -589,7 +824,7 @@ test('上入力なしで梯子の前を通っても乗らない', () => {
 test('下の床から上入力で梯子に乗り、中心へスナップ。1tick = CLIMB_SPEED で昇る', () => {
   const t = setup(LADDER); t.p.x = 68;
   t.press('up'); t.tick(1);
-  eq(t.p.mode, 'ladder', 'mode'); eq(t.p.x, 72, 'x'); eq(t.p.y, 216, 'y（乗る tick は昇らない）');
+  eq(t.p.mode, 'ladder', 'mode'); eq(t.p.x, 72, 'x'); eq(t.p.y, 216, 'y');
   t.tick(1); eq(t.p.y, 216 - C.PLAYER_CLIMB_SPEED, '1tick後');
 });
 test('範囲外(x=67)では乗れない', () => {
@@ -637,10 +872,9 @@ test('下へ降りて下端(y=216)で足場に乗ると ground に戻る', () =>
   holdUntil(t, () => t.p.mode === 'ground');
   eq(t.p.y, 216, 'y'); eq(t.p.mode, 'ground', 'mode'); eq(t.p.x, 72, 'x');
 });
-// 梯子のてっぺん（確定）: 床のある列へは横に入れない。床の無い列へは動ける
 const climbTop = (stage) => {
   const t = setup(stage); t.p.x = 72;
-  t.press('up'); t.tick(1 + 48); t.release('up');   // 乗る1tick + 48ドット昇って y=168
+  t.press('up'); t.tick(1 + 48); t.release('up');
   return t;
 };
 test('てっぺんで右を押し続けても、体が右の床の端に重なる手前（中心+2）で止まる。上の段には立てない', () => {
@@ -658,7 +892,7 @@ test('てっぺんでチョン(3ドット)すると、2ドット進んだとこ�
   t.press('right'); t.tick(1); t.release('right'); t.tick(20);
   eq(t.p.x, 72 + C.PLAYER_TAP_DOTS - 1, 'x'); eq(t.p.mode, 'ladder', 'mode');
   t.press('left'); t.tick(1); t.release('left'); t.tick(20);
-  eq(t.p.x, 74 - C.PLAYER_TAP_DOTS, '左へのチョンは3ドット全部進む（中心-2までは余裕がある）'); eq(t.p.mode, 'ladder', 'mode');
+  eq(t.p.x, 74 - C.PLAYER_TAP_DOTS, '左へのチョンは3ドット全部進む'); eq(t.p.mode, 'ladder', 'mode');
 });
 test('てっぺんで止まっていても、上下入力で中心へ戻れるし、下へ降りられる', () => {
   const t = climbTop(LADDER);
@@ -666,14 +900,13 @@ test('てっぺんで止まっていても、上下入力で中心へ戻れる�
   eq(t.p.x, 74, 'x');
   t.press('down'); t.tick(1); eq(t.p.x, 72, '中心へ戻る'); eq(t.p.y, 168 + C.PLAYER_CLIMB_SPEED, 'y');
 });
-test('途中の高さ（てっぺんでない）では、床の列へも動ける。中心から4ドット超で外れて落ちる（従来どおり）', () => {
+test('途中の高さ（てっぺんでない）では、床の列へも動ける。中心から4ドット超で外れて落ちる', () => {
   const t = setup(LADDER); t.p.x = 72;
-  t.press('up'); t.tick(1 + 46); t.release('up');       // y=170（てっぺんの2ドット下）
+  t.press('up'); t.tick(1 + 46); t.release('up');
   eq(t.p.y, 170, 'y');
   t.press('right'); holdUntil(t, () => t.p.mode === 'fall');
   eq(t.p.mode, 'fall', 'mode'); eq(t.p.x, 72 + C.LADDER_GRAB_DOTS + 1, 'x');
 });
-// 穴が2マス幅（col4,5）。てっぺんの右は床が無いので横に降りられる / 左（col3）は床があるので動けない
 const LADDER_WIDE_R = mkStage({ 6: '====..==========', 8: FULL }, LADDER_OBJ);
 test('てっぺんの横に床が無ければ（穴が広い）横に降りられる。中心から4ドット超で外れて落ち、床で止まる', () => {
   const t = climbTop(LADDER_WIDE_R);
@@ -688,40 +921,35 @@ test('穴が広くても、床のある側（左）へは動けない。床の�
   eq(t.p.x, 70, 'x'); eq(t.p.mode, 'ladder', 'mode');
 });
 test('樽の上面もてっぺんの高さの足場なら入れない（足場のある列は床と同じ扱い）', () => {
-  // 穴は col4,5。梯子 col4 の row7,8。col5 の row7 に樽 → 上面 y=168 = てっぺんの高さ
   const s = RK.Game.create(mkStage({ 6: '====..==========', 8: FULL }, { 7: '....LO..........', 8: '.P..L...........' })).stage;
-  eq(RK.Physics.blockedByFloorX(s, 75, 168, 12, 1), true, 'x=74→75 右へ（樽の上面の列に入る）');
+  eq(RK.Physics.blockedByFloorX(s, 75, 168, 12, 1), true, 'x=74→75 右へ');
   eq(RK.Physics.blockedByFloorX(s, 74, 168, 12, 1), false, 'x=73→74 右へ');
   const t = climbTop(mkStage({ 6: '====..==========', 8: FULL }, { 7: '....LO..........', 8: '.P..L...........' }));
   t.press('right'); t.tick(60);
   eq(t.p.x, 74, 'x'); eq(t.p.mode, 'ladder', 'mode');
 });
 test('blockedByFloorX: 足場のある列へ新しく入る一歩だけ止める。すでに入っているなら通す', () => {
-  const s = RK.Game.create(LADDER).stage;     // 穴は col4 だけ（x64..79）
+  const s = RK.Game.create(LADDER).stage;
   eq(RK.Physics.blockedByFloorX(s, 75, 168, 12, 1), true, '右 74→75');
   eq(RK.Physics.blockedByFloorX(s, 74, 168, 12, 1), false, '右 73→74');
   eq(RK.Physics.blockedByFloorX(s, 69, 168, 12, -1), true, '左 70→69');
   eq(RK.Physics.blockedByFloorX(s, 70, 168, 12, -1), false, '左 71→70');
-  eq(RK.Physics.blockedByFloorX(s, 76, 168, 12, 1), false, '右 75→76（先頭がすでに床の列。通す）');
-  eq(RK.Physics.blockedByFloorX(s, 75, 144, 12, 1), false, '足場面になる床の無い高さ(y=144)なら止めない');
+  eq(RK.Physics.blockedByFloorX(s, 76, 168, 12, 1), false, '右 75→76');
+  eq(RK.Physics.blockedByFloorX(s, 75, 144, 12, 1), false, 'y=144');
 });
 test('blockedByFloorX: 画面の端をまたぐ一歩も反対側の列で判定する', () => {
-  // col0 だけ床（col1〜15 は穴）: 右端から col0 へ入る一歩は止める
   const a = RK.Game.create(mkStage({ 6: '=' + '.'.repeat(15), 8: FULL }, { 8: '.P..............' })).stage;
-  eq(RK.Physics.blockedByFloorX(a, C.WIDTH - 5, 168, 12, 1), true, '右端 x=250→251: 先頭が col0（床）へ');
-  eq(RK.Physics.blockedByFloorX(a, C.WIDTH - 6, 168, 12, 1), false, '右端 x=249→250: まだ col15（穴）');
-  // col0 だけ穴（col1〜15 は床）: 左端から col15 へ入る一歩は止める
+  eq(RK.Physics.blockedByFloorX(a, C.WIDTH - 5, 168, 12, 1), true, '右端 x=250→251');
+  eq(RK.Physics.blockedByFloorX(a, C.WIDTH - 6, 168, 12, 1), false, '右端 x=249→250');
   const b = RK.Game.create(mkStage({ 6: '.' + '='.repeat(15), 8: FULL }, { 8: '.P..............' })).stage;
-  eq(RK.Physics.blockedByFloorX(b, 5, 168, 12, -1), true, '左端 x=6→5: 先頭が col15（床）へ');
-  eq(RK.Physics.blockedByFloorX(b, 6, 168, 12, -1), false, '左端 x=7→6: まだ col0（穴）');
+  eq(RK.Physics.blockedByFloorX(b, 5, 168, 12, -1), true, '左端 x=6→5');
+  eq(RK.Physics.blockedByFloorX(b, 6, 168, 12, -1), false, '左端 x=7→6');
 });
-// ハシゴの上に床がある場合（確定）: 床をすり抜けて昇れ、その床に乗れる
 const LADDER_FLOOR_TOP = mkStage({ 6: FULL, 8: FULL }, LADDER_OBJ);
 test('ハシゴの上に床があるときは、下から昇って床をすり抜け、てっぺん(y=168)でその床に乗れる（mode=ground）', () => {
   const t = setup(LADDER_FLOOR_TOP); t.p.x = 72;
   t.press('up'); t.tick(1 + 48);
   eq(t.p.y, 168, 'y'); eq(t.p.mode, 'ground', 'mode');
-  // 上を押し続けても勝手に梯子に戻らず、そのまま左右に歩ける
   t.tick(5); eq(t.p.mode, 'ground', '上押し続けでも ground');
   t.release('up'); t.press('right'); t.tick(30);
   eq(t.p.y, 168, '上の床を歩く y'); eq(t.p.x > 95, true, '上の床を歩く x=' + t.p.x);
@@ -734,11 +962,9 @@ test('ハシゴの上に床があるときも、上の段の床から下入力�
 });
 test('途中に床がある長い梯子でも、床をすり抜けて上まで昇れるし、途中の床の高さで横に降りればその床に乗れる', () => {
   const through = mkStage({ 6: FULL, 8: FULL }, { 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '.P..L...........' });
-  // そのまま上端(y=120)まで床をすり抜けて昇れる
   const a = setup(through); a.p.x = 72;
   a.press('up'); a.tick(1 + 96);
   eq(a.p.y, 120, '上端 y'); eq(a.p.mode, 'ladder', '上端は穴なので ladder');
-  // 途中の床の高さ(y=168)で止まって横へ降りると、落下せずその床(y=168)に乗れる
   const b = setup(through); b.p.x = 72;
   b.press('up'); b.tick(1 + 48); b.release('up');
   eq(b.p.y, 168, '途中の床の高さ'); eq(b.p.mode, 'ladder', 'まだ梯子上');
