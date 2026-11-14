@@ -3,19 +3,24 @@
  *   体の矩形: 左 = x - w/2, 上 = y - h, 右 = x + w/2, 下 = y
  *   いるセル: col = stage.colAt(x), row = stage.rowAtFeet(y)
  *
- * ステップ7の範囲: 左右移動（樽には横から通れない。壁は背景側なので通れる。画面の左右端はつながっている）、
- *   床・樽の上に立つ、足場が無くなったら通常落下、梯子の昇降、ハンマー攻撃（画面奥に振り、壁W/w/Vを破壊）。
+ * ステップ8aの範囲: 左右移動（樽には横から通れない。壁は背景側なので通れる。画面の左右端はつながっている）、
+ *   床・樽の上に立つ、足場が無くなったら通常落下、梯子の昇降、ハンマー攻撃（画面奥に振り、壁W/w/Vを破壊）、
+ *   異常落下（通常の床や途中の段の樽を無視して一番下の床またはその上の樽まで落下。落下中は無敵、着地後即座に無敵解除＆0.5s硬直）。
  * 中心x は常に 0 〜 WIDTH-1。端を越えたら反対側へ移る（moveX）。体が端をまたいでいる間の足場・樽の判定は terrain.js。
- * まだ無いもの: 異常落下(8)、敵(8)、鉄柱・爆弾・扉の挙動(9)。
+ * まだ無いもの: 敵(8b〜)、破壊可能な梯子・鉄柱・爆弾・扉の挙動(9)。
  * 描画はこのファイルに無い（sprites.js）。足場・衝突の判定は physics/terrain.js。ここは状態を更新するだけ。
  *
- * mode（通常落下と異常落下は別状態にする。いまは 'ground' / 'fall' / 'ladder'）:
+ * mode（通常落下と異常落下は必ず別状態にする）:
  *  - 'ground': 足場の上。左右に動ける。毎tick、足場に乗っているかを確認し、乗っていなければ 'fall' へ。
- *              歩行可能なこの状態でのみハンマーを振れる。振った瞬間に画面奥の1セル（自分の中心があるセル）を1回叩き、
+ *              歩行可能なこの状態（かつ硬直・ロック中でないとき）でのみハンマーを振れる。振った瞬間に画面奥の1セル（自分の中心があるセル）を1回叩き、
  *              HAMMER_LOCK_FRAMES の間は行動を受け付けず、HAMMER_COOLDOWN_FRAMES の間は次のハンマーを振れない。
  *  - 'fall'  : 通常落下。1tick に PLAYER_FALL_SPEED ドット下へ。足場（床か樽の上）で止まり 'ground' に戻る。
  *              落下中は左右入力を無視する（暫定。context.md §9 / §11）。ハンマーは振れない。
  *              落下中に上入力があり、体の足元に梯子（中心から LADDER_GRAB_DOTS 以内）があれば、つかまって 'ladder' へ。
+ *  - 'abnormal_fall': 異常落下。梯子の破壊や爆発などで強制的に発生（startAbnormalFall）。
+ *              1tick に PLAYER_ABNORMAL_FALL_SPEED ドット下へ。通常の床や途中の段の樽を無視し、一番下の床または一番下の床の上の樽で止まる。
+ *              落下中は無敵（invincible = true）。左右移動・梯子つかまり・ハンマー攻撃はすべて不可。
+ *              着地した瞬間に 'ground' へ戻り、無敵は即座に解除（invincible = false）され、PLAYER_ABNORMAL_LAND_STUN_FRAMES（0.5s）の着地硬直に入る。
  *  - 'ladder': 梯子の上。上下入力で PLAYER_CLIMB_SPEED ドット/tick で昇り降り（x は中心へ寄る）。ハンマーは振れない。
  *              昇り降りしていない tick は、どの高さでも左右に動ける。中心から LADDER_GRAB_DOTS ドットを超えて離れたら梯子から外れ、
  *              その高さに足場があれば 'ground' に乗り、なければ通常落下。
@@ -43,13 +48,15 @@
       w: C.PLAYER_W,
       h: C.PLAYER_H,
       facing: 1,                          // 向き。-1=左 / 1=右
-      mode: 'ground',                     // 'ground' / 'fall'（通常落下）/ 'ladder'。将来: 'abnormal_fall'
+      mode: 'ground',                     // 'ground' / 'fall'（通常落下）/ 'abnormal_fall'（異常落下）/ 'ladder'
       ladderCol: -1,                      // 'ladder' のとき乗っている梯子の列
       stepDir: 0,                         // チョン移動の向き
       stepTick: C.PLAYER_TAP_FRAMES,      // チョン開始からの経過tick。PLAYER_TAP_FRAMES 以上なら「チョンではない」
       hammerFrames: 0,                    // ハンマー表示の残りtick（0なら非表示）
       hammerLockFrames: 0,                // ハンマー後の行動受付不可の残りtick（歩行クールタイム）
       hammerCooldown: 0,                  // 次にハンマーを振れるまでの残りtick（ハンマークールタイム）
+      stunFrames: 0,                      // 異常落下の着地後に動けない残りtick（0.5s）
+      invincible: false,                  // 無敵状態（異常落下中のみ true、着地後即座に false）
     };
   }
 
@@ -72,9 +79,21 @@
   /** 通常落下を始める。チョンの途中だったら捨てる（着地後に残さない） */
   function startFall(p) {
     p.mode = 'fall';
+    p.ladderCol = -1;
     p.stepDir = 0;
     p.stepTick = C.PLAYER_TAP_FRAMES;
     p.hammerLockFrames = 0;
+  }
+
+  /** 異常落下を始める（梯子破壊・爆発など）。落下中は無敵、進行中のチョン・ロックは破棄 */
+  function startAbnormalFall(p) {
+    p.mode = 'abnormal_fall';
+    p.invincible = true;
+    p.ladderCol = -1;
+    p.stepDir = 0;
+    p.stepTick = C.PLAYER_TAP_FRAMES;
+    p.hammerLockFrames = 0;
+    p.stunFrames = 0;
   }
 
   /** 梯子に乗る。x を梯子の中心へスナップし、チョンの途中だったら捨てる */
@@ -107,6 +126,18 @@
     const r = RK.Physics.fallTo(stage, p.x, p.w, p.y, C.PLAYER_FALL_SPEED);
     p.y = r.y;
     if (r.landed) p.mode = 'ground';
+  }
+
+  /** 異常落下の1tick。通常の床や途中の段の樽を無視し、一番下の床またはその上の樽で停止。着地瞬間に無敵解除・0.5s硬直開始 */
+  function updateAbnormalFall(p, stage) {
+    p.invincible = true;
+    const r = RK.Physics.abnormalFallTo(stage, p.x, p.w, p.y, C.PLAYER_ABNORMAL_FALL_SPEED);
+    p.y = r.y;
+    if (r.landed) {
+      p.mode = 'ground';
+      p.invincible = false;
+      p.stunFrames = C.PLAYER_ABNORMAL_LAND_STUN_FRAMES;
+    }
   }
 
   /** 左右の入力を処理して横に動かす（チョン + 連続）。足場の上と、梯子の上で使う。solidFloor は梯子のてっぺんのとき true（moveX 参照） */
@@ -147,7 +178,7 @@
    * 梯子の上での1tick。上下入力で昇り降り（x は中心へ）。昇り降りしていない tick は左右に動ける（どの高さでも）。
    * 上端か下端で足場に乗ったら 'ground'（梯子の真上に床があるときは床をすり抜けて上端でその床に乗る）。
    * そうでなく中心から LADDER_GRAB_DOTS を超えて離れたら梯子から外れ、その高さに足場があれば 'ground'、なければ通常落下。
-   * 梯子が無くなっていたら落ちる（将来、梯子の破壊は異常落下になる。ステップ8）。
+   * 梯子が無くなっていたら落ちる（将来、梯子の破壊は startAbnormalFall を使う）。
    */
   function updateLadder(p, input, stage) {
     const span = RK.Physics.ladderSpan(stage, p.ladderCol, p.y);
@@ -174,6 +205,13 @@
     if (p.hammerFrames > 0) p.hammerFrames--;
     if (p.hammerLockFrames > 0) p.hammerLockFrames--;
     if (p.hammerCooldown > 0) p.hammerCooldown--;
+    if (p.stunFrames > 0) p.stunFrames--;
+    p.invincible = (p.mode === 'abnormal_fall');
+
+    if (p.mode === 'abnormal_fall') {
+      updateAbnormalFall(p, stage);
+      return;
+    }
 
     // 足場が（スポーン位置や、将来は破壊で）無くなっていたら、この tick から落ちる
     if (p.mode === 'ground' && !RK.Physics.isSupported(stage, p.x, p.y, p.w)) startFall(p);
@@ -183,6 +221,8 @@
     } else if (p.mode === 'ladder') {
       updateLadder(p, input, stage);
     } else {
+      // 異常落下着地後の硬直中は動けない・ハンマーも振れない
+      if (p.stunFrames > 0) return;
       // 歩行可能な状態('ground')でのみハンマーを振れる。振ったあと HAMMER_LOCK_FRAMES は行動を受け付けない
       if (input.hammerPressed && p.hammerCooldown === 0 && p.hammerLockFrames === 0) {
         swingHammer(p, stage);
@@ -192,5 +232,5 @@
     }
   }
 
-  RK.Player = Object.freeze({ create, update, moveX });
+  RK.Player = Object.freeze({ create, update, moveX, startAbnormalFall });
 })(window);
