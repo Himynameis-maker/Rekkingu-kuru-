@@ -39,7 +39,7 @@
     PLAYER_ABNORMAL_LAND_STUN_FRAMES: 30, // 異常落下の着地後に動けないtick数（0.5秒 @ 60Hz。変更可能）
 
     // --- 梯子（ステップ5。暫定値） ---
-    PLAYER_CLIMB_SPEED: 1,  // 梯子の昇り降りの速さ。1tickあたりのドット数（整数）。24ドット(1セル)を24tick
+    PLAYER_CLIMB_SPEED: 1,  // プレイヤーの梯子昇降速度（上下共通、ドット/tick。小数値も可）。1なら24ドット(1セル)を24tick
     LADDER_GRAB_DOTS: 4,    // 梯子の中心から何ドット以内なら乗れる/つかまれる/つかまっていられるか（中心x のずれ）
 
     // --- 壁の耐久値（ステップ7。確定） ---
@@ -59,7 +59,10 @@
     RUNNER_SPEED: 0.9,                  // Runner の基本移動速度（ドット/tick。暫定）
     FAST_CHASER_SPEED: 1,               // Fast Chaser の移動速度（ドット/tick。暫定）
     ENEMY_SPEED_BOOST_STEP: 0.2,        // 落下経験1回あたりの速度上昇幅（最大2段階。暫定）
-    ENEMY_CLIMB_SPEED: 1,               // 敵の梯子昇降速度（ドット/tick。暫定）
+    ENEMY_CLIMB_SPEED: 1,               // Chaser の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
+    RUNNER_CLIMB_SPEED: 1,              // Runner の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
+    FOREMAN_CLIMB_SPEED: 1,             // Foreman の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
+    FAST_CHASER_CLIMB_SPEED: 1,         // Fast Chaser の梯子昇降速度（上下共通、ドット/tick。小数値も可。暫定）
     ENEMY_FALL_SPEED: 2,                // 敵の落下速度（ドット/tick。暫定）
     ENEMY_ABNORMAL_LAND_STUN_FRAMES: 60 // 敵の異常落下後のスタンtick数（1.0秒 @ 60Hz。暫定。親方は対象外）
   });
