@@ -467,7 +467,7 @@ test('通常落下着地時、敵はスタンせず即座に歩行を再開す�
   ));
   const chaser = t.game.enemies[0];
   const foreman = t.game.enemies[1];
-  t.tick(80);
+  t.tick(100);
   eq(chaser.y, 216, 'chaser着地');
   eq(foreman.y, 216, 'foreman着地');
   eq(chaser.stunFrames, 0, '通常落下ではchaserもスタンしない');
@@ -1052,11 +1052,36 @@ test('ハシゴの上に床があるときは、下から昇って床をすり�
   t.release('up'); t.press('right'); t.tick(30);
   eq(t.p.y, 168, '上の床を歩く y'); eq(t.p.x > 95, true, '上の床を歩く x=' + t.p.x);
 });
-test('ハシゴの上に床があるときも、上の段の床から下入力で床をすり抜けて梯子に降りることはできない', () => {
+test('ハシゴの上に床があるとき、上の段の床から下入力で床をすり抜けて梯子に降りられる（B）。乗る tick は動かず、以後 1tick = CLIMB_SPEED で降りる', () => {
   const t = setup(mkStage({ 6: FULL, 8: FULL }, { 6: '....P...........', 7: '....L...........', 8: '....L...........' }));
   eq(t.p.x, 72, 'x'); eq(t.p.y, 168, 'y');
-  t.press('down'); t.tick(10);
-  eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 168, 'y');
+  t.press('down'); t.tick(1);
+  eq(t.p.mode, 'ladder', '乗る'); eq(t.p.y, 168, '乗る tick は動かない');
+  t.tick(10); eq(t.p.y, 168 + 10, '1tick = 1ドット降りる');
+  t.tick(38); eq(t.p.y, 216, '下の床まで'); eq(t.p.mode, 'ground', '下端の床に乗る');
+});
+test('床の上から下入力で降りるとき、梯子の中心から±4ドット以内ならスナップして乗る。範囲外なら乗らない', () => {
+  const near = setup(mkStage({ 6: FULL, 8: FULL }, { 6: '....P...........', 7: '....L...........', 8: '....L...........' }));
+  near.p.x = 68; near.press('down'); near.tick(1);
+  eq(near.p.mode, 'ladder', 'x=68 は乗れる'); eq(near.p.x, 72, '中心へスナップ');
+  const far = setup(mkStage({ 6: FULL, 8: FULL }, { 6: '....P...........', 7: '....L...........', 8: '....L...........' }));
+  far.p.x = 67; far.press('down'); far.tick(5);
+  eq(far.p.mode, 'ground', 'x=67 は乗れない'); eq(far.p.y, 168, 'y');
+});
+test('真下に梯子が無ければ下入力しても何も起きない（一番下の床・梯子の無い列）', () => {
+  const bottom = setup(LADDER); bottom.p.x = 72; bottom.press('down'); bottom.tick(5);
+  eq(bottom.p.mode, 'ground', '一番下の床'); eq(bottom.p.y, 216, 'y');
+  const none = setup(mkStage({ 6: FULL, 8: FULL }, { 6: '.P..............', 7: '....L...........', 8: '....L...........' }));
+  none.press('down'); none.tick(5);
+  eq(none.p.mode, 'ground', '梯子の無い列'); eq(none.p.y, 168, 'y');
+});
+test('A: 下から上入力で梯子に乗り、床をすり抜けて昇れる。B: 上の床から下入力で同じ梯子を降りられる（往復できる）', () => {
+  const t = setup(LADDER_FLOOR_TOP); t.p.x = 72;
+  t.press('up'); t.tick(1 + 48);
+  eq(t.p.y, 168, 'A: 上の床へ'); eq(t.p.mode, 'ground', 'A: ground');
+  t.release('up'); t.tick(2);
+  t.press('down'); t.tick(1 + 48);
+  eq(t.p.y, 216, 'B: 下の床へ'); eq(t.p.mode, 'ground', 'B: ground');
 });
 test('途中に床がある長い梯子でも、床をすり抜けて上まで昇れるし、途中の床の高さで横に降りればその床に乗れる', () => {
   const through = mkStage({ 6: FULL, 8: FULL }, { 5: '....L...........', 6: '....L...........', 7: '....L...........', 8: '.P..L...........' });
@@ -1069,7 +1094,7 @@ test('途中に床がある長い梯子でも、床をすり抜けて上まで�
   b.press('right'); holdUntil(b, () => b.p.mode === 'ground');
   eq(b.p.y, 168, '床をすり抜けず y=168 に乗る'); eq(b.p.mode, 'ground', 'mode');
 });
-test('上の段では下入力しても梯子には乗らない（降りるときは穴を歩いて落ち、つかまる）', () => {
+test('上の段の穴のてっぺんの梯子には、下入力しても乗らない（降りるときは穴を歩いて落ち、つかまる）', () => {
   const t = setup(LADDER_UP); t.p.x = 69; t.press('down'); t.tick(5);
   eq(t.p.mode, 'ground', 'mode'); eq(t.p.y, 168, 'y'); eq(t.p.x, 69, 'x');
 });
@@ -1146,6 +1171,80 @@ test('Stepper: 120Hz 表示(8.33ms)でも 60tick/秒', () => {
   let n = 0; const s = RK.Loop.createStepper(() => n++);
   for (let i = 0; i < 120; i++) s.advance(1000 / 120);
   eq(n, 60, 'tick数');
+});
+
+console.log('敵の通常落下(スタンなし)・梯子の床すり抜け(A/B)・Runnerの梯子使用（ステップ8b-3 修正）');
+const ENEMY_CHAR = { chaser: '1', runner: '2', fast_chaser: '4' };
+Object.keys(ENEMY_CHAR).forEach((id) => {
+  test(id + ': 通常落下の着地でスタンせず、着地後すぐ歩き出す（速度段階だけ上がる）', () => {
+    const objs = { 6: '..' + ENEMY_CHAR[id] + '.............', 8: '............P...' };
+    const t = setup(mkStage({ 6: '==.=============', 8: FULL }, objs));
+    const e = t.game.enemies[0];
+    holdUntil(t, () => e.mode === 'ground' && e.y === 216, 200);
+    eq(e.y, 216, '着地した'); eq(e.mode, 'ground', 'ground');
+    eq(e.stunFrames, 0, '通常落下ではスタンしない');
+    eq(e.speedBoost, 1, '速度段階は上がる');
+    const x0 = e.x; t.tick(20);
+    eq(e.x !== x0, true, '着地後すぐ歩いている x0=' + x0 + ' x=' + e.x);
+  });
+  test(id + ': 異常落下の着地ではスタンする（通常落下との区別）', () => {
+    const t = setup(mkStage({ 4: FULL, 8: FULL }, { 4: '..' + ENEMY_CHAR[id] + '.............', 8: '............P...' }));
+    const e = t.game.enemies[0];
+    RK.Enemy.startAbnormalFall(e);
+    holdUntil(t, () => e.mode === 'ground', 200);
+    eq(e.y, 216, '一番下の床'); eq(e.stunFrames > 0, true, '異常落下ではスタン');
+  });
+});
+
+/* 梯子(rows 5〜8, col 5)、行4と行8に床。梯子のてっぺん(y=120)の真上に床があるので、床をすり抜けて昇降できる。
+ * row8 の col5 が '.' なら梯子の最下段 'L' を自動で置く */
+const FLOOR_LADDER_OBJ = { 5: '.....L..........', 6: '.....L..........', 7: '.....L..........' };
+function floorLadder(row4, row8) {
+  const r8 = row8.split(''); if (r8[5] === '.') r8[5] = 'L';
+  return mkStage({ 4: FULL, 8: FULL }, Object.assign({ 4: row4, 8: r8.join('') }, FLOOR_LADDER_OBJ));
+}
+test('Chaser: 下の段から、上の段のプレイヤーを追って梯子を昇り、床をすり抜けて上の床に出る（A）', () => {
+  const t = setup(floorLadder('...........P....', '.1...L..........'));
+  const e = t.game.enemies[0]; let sawLadder = false;
+  for (let i = 0; i < 400 && !(e.y === 120 && e.mode === 'ground'); i++) { t.tick(); if (e.mode === 'ladder') sawLadder = true; }
+  eq(sawLadder, true, '梯子を使った'); eq(e.y, 120, '上の床 y'); eq(e.mode, 'ground', 'ground');
+});
+test('Chaser: 上の段から、下の段のプレイヤーを追って床をすり抜けて梯子を降りる（B）', () => {
+  const t = setup(floorLadder('.1..............', '...........P....'));
+  const e = t.game.enemies[0]; let sawLadder = false;
+  for (let i = 0; i < 400 && !(e.y === 216 && e.mode === 'ground'); i++) { t.tick(); if (e.mode === 'ladder') sawLadder = true; }
+  eq(sawLadder, true, '梯子を使った'); eq(e.y, 216, '下の床 y'); eq(e.mode, 'ground', 'ground');
+});
+test('Runner: 下の段から梯子を昇り、床をすり抜けて上の床に出る（A。プレイヤーは追わない）', () => {
+  const t = setup(floorLadder('P...............', '.2..............'));
+  const e = t.game.enemies[0]; let sawLadder = false;
+  for (let i = 0; i < 400 && !(e.y === 120 && e.mode === 'ground'); i++) { t.tick(); if (e.mode === 'ladder') sawLadder = true; }
+  eq(sawLadder, true, '梯子を使った'); eq(e.y, 120, '上の床 y'); eq(e.mode, 'ground', 'ground');
+});
+test('Runner: 上の段から、床をすり抜けて梯子を降りる（B。初回は下優先）', () => {
+  const t = setup(floorLadder('.2..............', 'P...............'));
+  const e = t.game.enemies[0]; let sawLadder = false;
+  for (let i = 0; i < 400 && !(e.y === 216 && e.mode === 'ground'); i++) { t.tick(); if (e.mode === 'ladder') sawLadder = true; }
+  eq(sawLadder, true, '梯子を使った'); eq(e.y, 216, '下の床 y'); eq(e.mode, 'ground', 'ground');
+});
+test('Runner: プレイヤーが同じ高さにいても別の高さにいても、梯子の前を通れば使う（プレイヤー非依存）', () => {
+  ['.2.......P......', '.2..............'].forEach((row8, i) => {
+    const t = setup(floorLadder('................', row8)); const e = t.game.enemies[0];
+    let sawLadder = false;
+    for (let k = 0; k < 250; k++) { t.tick(); if (e.mode === 'ladder') sawLadder = true; }
+    eq(sawLadder, true, 'ケース' + i + ': 梯子を使った');
+  });
+});
+test('AIが未登録の実装済み敵種は、コンソールに警告して仮AIで動く（読み込み順の誤りに気づける）', () => {
+  const warns = []; sandbox.console = { warn: (m) => warns.push(String(m)) };
+  const orig = RK.RunnerAI.decide;
+  try {
+    RK.Enemy.registerAI('runner', null);
+    setup(mkStage({ 8: FULL }, { 8: 'P.2.............' }));
+    eq(warns.length, 1, '警告は1回'); eq(warns[0].indexOf('runner') >= 0, true, 'runner と書かれている');
+  } finally {
+    RK.Enemy.registerAI('runner', orig); delete sandbox.console;
+  }
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
