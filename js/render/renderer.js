@@ -1,6 +1,12 @@
 /* ===== ステージ・アクター描画 =====
  * 状態を読むだけで、ゲームルールは持たない。
- * 描画順: 物（奥の壁等） → アクター（プレイヤー・敵・ハンマー） → 床（足元4ドット帯） → グリッド線
+ * 描画順:
+ *   1. 背景塗りつぶし
+ *   2. 裏側アクター（親方 Foreman: 壁などの裏側にいるキャラ）
+ *   3. 物レイヤー（壁・梯子・樽など）
+ *   4. 表側アクター（プレイヤー・他の敵・ハンマー）
+ *   5. 床（足元4ドット帯）
+ *   6. グリッド線
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
@@ -20,7 +26,16 @@
     ctx.fillStyle = C.BG_COLOR;
     ctx.fillRect(0, 0, C.WIDTH, C.HEIGHT);
 
-    // 1. 物レイヤー（壁・梯子・樽など）
+    // 1. 裏側アクター（親方 Foreman は壁などの裏側にいるキャラ）
+    if (actors) {
+      for (let i = 0; i < actors.length; i++) {
+        if (actors[i].id === 'foreman') {
+          RK.Sprites.drawActor(ctx, actors[i]);
+        }
+      }
+    }
+
+    // 2. 物レイヤー（壁・梯子・樽など）
     for (let r = 0; r < stage.rows; r++) {
       for (let c = 0; c < stage.cols; c++) {
         const id = stage.idAt(c, r);
@@ -39,14 +54,16 @@
       }
     }
 
-    // 2. アクター（プレイヤー・敵・ハンマー）
+    // 3. 表側アクター（プレイヤー・他の敵・ハンマー）
     if (actors) {
       for (let i = 0; i < actors.length; i++) {
-        RK.Sprites.drawActor(ctx, actors[i]);
+        if (actors[i].id !== 'foreman') {
+          RK.Sprites.drawActor(ctx, actors[i]);
+        }
       }
     }
 
-    // 3. 床（セル下端の見た目帯）
+    // 4. 床（セル下端の見た目帯）
     for (let r = 0; r < stage.rows; r++) {
       const y = (r + 1) * C.CELL_H - C.FLOOR_DRAW_H;
       for (let c = 0; c < stage.cols; c++) {
@@ -56,7 +73,7 @@
       }
     }
 
-    // 4. グリッド線（Gキーで切替）
+    // 5. グリッド線（Gキーで切替）
     if (Renderer.showGrid) {
       drawGrid(ctx, stage);
     }
