@@ -8,17 +8,18 @@
 
 ## 0. いまの状態
 - **概要**: ファミコン時代の固定画面2Dアクションパズル（ハンマーで壊し、敵の挙動を利用してクリア）の再構築。HTML + Canvas + 素のJS（ES Modules不使用、`window.RK` 名前空間、`index.html` 直開きで動作）。
-- **実装済み（ステップ0〜8a）**:
+- **実装済み（ステップ0〜8b-1）**:
   - 256×216（16列×9行）の2レイヤー描画（`floor` / `objects`）、整数倍拡大、グリッド線表示（Gキー）。
   - 固定60Hzループ、キーボード・擬似スティック・ハンマーボタンの入力統一（ラッチ対応）。
-  - 左右移動（チョン押し＋連続移動）、画面端の左右ループ（端をまたぐ体の足場・樽判定、両側描画）。
+  - プレイヤーの左右移動（チョン押し＋連続移動）、画面端の左右ループ（端をまたぐ体の足場・樽判定、両側描画）。
   - 樽の横衝突（樽のみ通れない。壁は背景側のため通れる）、1ドットでも足場に乗れば立てる判定、通常落下（`mode: 'fall'`）。
   - 梯子の昇降（乗る・昇り降り・途中から左右に降りる・落下中に上入力でつかまる。梯子の真上に床があるときのみ床をすり抜けて上の床に乗れる。上が穴のてっぺんでは足場列へ横に入れない）。
   - ハンマー攻撃と壁3種の破壊（歩行可能な `ground` 状態でのみ画面奥1セルを叩き、`W`=1/`w`=2/`V`=3回で破壊。同時破壊なし。振ったあと0.3秒の歩行ロックとクールタイムを分離管理）。
   - 異常落下（`mode: 'abnormal_fall'`。途中の床や途中の段の樽を無視し、一番下の床またはその上の樽まで落下。落下中は無敵、着地で即座に無敵解除＆0.5秒の着地硬直）。
-- **未実装**: 敵4種（Chaser / Runner / Foreman / Fast Chaser）、破壊可能な梯子 `L`・鉄柱・爆弾・扉の破壊や挙動、落下する樽、火の玉、ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）、ステージエディタ、ドット絵・サウンド。
-- **次の作業**: **ステップ8b**（Chaser → Runner → Foreman → Fast Chaser、および破壊可能な梯子 `L` の破壊）。
-- **テスト**: `node tests/run.js`（ロジック 105件）と `node tests/smoke.js`（偽DOM起動・操作 17件）が全件通過する状態を維持する。
+  - **敵の共通土台（`js/entities/enemy.js`）**: 敵4種（`chaser` / `runner` / `foreman` / `fast_chaser`）のスポーン・描画、グリッドの節目（`spawn` / `cell_center` / `blocked` / `ladder_floor` / `land` / `abnormal_recover`）でのみAI判断を呼び出す移動制御、梯子昇降、通常/異常落下、親方以外の着地スタン・速度段階上昇（AIロジック本体は `registerAI` で差し込む構造）。
+- **未実装**: 敵4種の個別AI判断ロジック（Chaser → Runner → Foreman → Fast Chaser）、破壊可能な梯子 `L`・鉄柱・爆弾・扉の破壊や挙動、落下する樽、火の玉、ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）、ステージエディタ、ドット絵・サウンド。
+- **次の作業**: **ステップ8b-2**（Chaser の個別AI判断ロジック実装 → 続けて Runner / Foreman / Fast Chaser）。
+- **テスト**: `node tests/run.js`（ロジック 113件）と `node tests/smoke.js`（偽DOM起動・操作 17件）が全件通過する状態を維持する。
 
 ## 1. 作業ルール（AI への指示）
 1. **仕様にない独自ルールを勝手に追加しない。** 決める必要が出たら「未決事項」に書き、選択肢を出して聞く。暫定値を入れた場合は §9 と「進捗」に「暫定」と明記する。
@@ -42,7 +43,7 @@
 - 状態遷移: **READY**（約1.5秒）→ **PLAY** → **MISS**（約1.2秒後に再開）/ **CLEAR**（約2秒）。READY/MISS 中は操作も敵AIも停止。
 
 ### 敵（4種）
-行動の再評価は**イベント時のみ**（ゲーム開始 / 通常落下から着地 / 梯子に到達 / 梯子の移動終了 / 梯子から降りた / 異常落下から復帰）。毎フレーム無条件に方向を変えない。
+行動の再評価は**イベント時のみ**（ゲーム開始 / セル中心到達 / 障害物衝突 / 梯子での床高さ到達 / 通常落下から着地 / 異常落下から復帰）。毎フレーム無条件に方向を変えない。
 - **Chaser（追尾）**: プレイヤーと**同じ高さ** → 現在の進行方向を基本に横移動し、進めなければ反転（左右位置から最短距離計算はしない）。**違う高さ** → 高さ差を縮める梯子を探して使う。複数あれば距離等で選び、**同条件なら左を優先**。「上に隣接しているだけで接続されていない梯子」は登れる梯子として扱わない（下方向も到達可能か判定）。**有効な梯子が無いときは現在の横方向を維持**し、高さが違うだけで反転しない。
 - **Runner（直進）**: プレイヤーを追跡しない。進行方向へ直進し、壁・障害物で進めなければ反転。梯子に着いたら上下どちらへ行くかを決め、一度決めた傾向を基本にする（行けなければ反対を試す）。上下移動後は横移動を優先。
 - **Foreman（親方）**: Chaser に近い追跡 + 独自行動。行動切り替え時に約0.4〜1.2秒停止することがある。接近するとハンマーで**梯子・壁・鉄柱**を壊す（**爆弾は壊さない**）。破壊で梯子上のキャラ（親方自身も）が異常落下することがある。接触ミス対象外・落下後スタンの対象外。
@@ -73,7 +74,7 @@
 | 足場面 | 床の面。セルの下端 `y = (row+1)*24` にある厚み0の線（描画用の帯4ドットとは別） |
 | 中心x / 足y | キャラ座標。足場面に立つとき `足y = 足場面のy` |
 | tick | ロジックの1ステップ（1/60秒） |
-| チョン | 方向を一瞬押して数ドットだけ進める移動（§9） |
+| チョン | 方向を一瞬押して数ドットだけ進める移動（§7） |
 | ラッチ | tick 間の「押して離した」短い入力を次の `poll()` で1回拾う仕組み |
 | アクター | 動くもの（プレイヤー・敵）。`game.actors` に入る |
 
@@ -85,12 +86,13 @@
 | 画面・セル | 256 × 216（16列 × 9行）、1セル = 16 × 24（横2:縦3）。整数倍拡大＋`image-rendering: pixelated` |
 | ステージ2レイヤー | `floor`（`=` / `.` のみ）と `objects`（壁・梯子・樽・アクター初期位置等）の2層構造 |
 | 床の判定と描画 | 床はセル下端の**厚み0の面**（セルを占有しない）。見た目だけ下端4ドット（`FLOOR_DRAW_H`）に帯を描く |
-| 座標・体と足幅 | 座標は整数ドット（グリッド吸着なし）。体は横 `x - w/2` 〜 `x + w/2 - 1`、縦 `y - h` 〜 `y - 1`（`w=12, h=24`）。横12ドットのうち**1ドットでも足場（床面・樽上面）に重なっていれば立てる**（16ドット幅の穴は中心がセル中心 ±2ドット以内に入るまで落ちない） |
+| 座標・体と足幅 | 座標は整数ドット（グリッド吸着なし）。体は横 `x - w/2` 〜 `x + w/2 - 1`、縦 `y - h` 〜 `y - 1`（`w=12, h=24`）。横12ドットのうち**1ドットでも足場（床面・樽上面）に重なっていれば立てる** |
 | 梯子のすり抜けと上端 | 梯子は上下の足場面の間をすべて `L`/`H` で埋める。**梯子の真上に床（`=`）があるときに限り床をすり抜けて昇り、上端 `y = span.top` でその床（`'ground'`）に乗れる**。上が穴（`.`）のてっぺんでは、足場のある列（床・樽上面）へ横に入れない（`blockedByFloorX`）。途中の高さでは左右に降りられ、中心から `LADDER_GRAB_DOTS`（暫定4）を超えると外れて足場があれば `'ground'`、なければ通常落下。落下中に上入力でつかまる。上の段から梯子へ降りる専用の下入力は無い |
 | 横方向の衝突 | **樽だけ**横から通れない（セル全体 16×24、上面は足場）。**壁（`W`/`w`/`V`）は画面奥側（背景）のため通れる**（鉄柱・扉・爆弾は未決） |
 | 壁耐久値とハンマー | `W`=1, `w`=2, `V`=3 で破壊（床は残る）。歩行可能な `mode === 'ground'` のみ使用可。押した瞬間に**画面奥の1セル `(colAt(x), rowAtFeet(y))` を1回叩く**（同時破壊なし）。振ったあと `0.3s`（18tick）の歩行・梯子ロック（`HAMMER_LOCK_FRAMES`）と `0.3s`（18tick）のクールタイム（`HAMMER_COOLDOWN_FRAMES`）を分離管理 |
 | 画面端ループ（暫定） | 中心 `x` が画面外へ出た瞬間に反対側へ移す（常に `0〜WIDTH-1`）。端をまたぐ体の足場・樽判定は反対側の列として行い、描画は両側に描く。梯子探索は折り返さない |
-| 通常落下 vs 異常落下 | 完全に別状態として扱う。**通常落下（`fall`）**: 足場がなくなると発生し、床か樽の上面で停止。**異常落下（`abnormal_fall`）**: 梯子破壊・爆発等で `RK.Player.startAbnormalFall(p)` により発生。速度は通常落下と同じ（2ドット/tick）。**途中の床や途中の段の樽をすり抜け、一番下の床（`y = HEIGHT`）または一番下の床の上の樽の上面でのみ停止**。**落下中は無敵（`invincible = true`）**・操作不可。着地した瞬間に `'ground'` へ戻り、**即座に無敵解除（`invincible = false`）**・**`0.5s`（30tick）の着地硬直**に入る |
+| 通常落下 vs 異常落下 | 完全に別状態として扱う。**通常落下（`fall`）**: 足場がなくなると発生し、床か樽の上面で停止。**異常落下（`abnormal_fall`）**: 梯子破壊・爆発等で `startAbnormalFall` により発生。**途中の床や途中の段の樽をすり抜け、一番下の床（`y = HEIGHT`）または一番下の床の上の樽の上面でのみ停止**。**落下中は無敵（`invincible = true`）**・操作不可。着地した瞬間に `'ground'` へ戻り、**即座に無敵解除（`invincible = false`）**・着地硬直に入る |
+| 敵の移動とAI判断分離 | 移動は整数ドット連続、AI判断はグリッドの節目（`spawn` / `cell_center` / `blocked` / `ladder_floor` / `land` / `abnormal_recover`）でのみ `RK.Enemy.registerAI` の関数を呼び出す |
 
 ---
 
@@ -100,27 +102,28 @@
 - `index.html`: 読み込み順＝依存順の `<script>` 定義とタッチUIのDOM
 - `context.md` / `仕様書.txt`: 本ファイル / 再構築仕様書原文
 - `css/style.css`: 画面・擬似スティック・ハンマーボタンのスタイル
-- `js/config.js`: 定数（画面・セル・移動/落下速度・壁HP・クールタイム等）
+- `js/config.js`: 定数（画面・セル・移動/落下速度・壁HP・クールタイム・敵定数）
 - `js/main.js`: 起動・配線のみ（ルールを持たない）
 - `js/core/input.js`: 入力統一（スナップショット・ラッチ・キーボード接続）
 - `js/core/touch.js`: 擬似スティック＋ハンマーボタン（Pointer Events）
 - `js/core/loop.js`: 固定60Hzタイムステップループ
-- `js/core/game.js`: ゲーム状態・Stage生成・アクター更新
+- `js/core/game.js`: ゲーム状態・Stage生成・プレイヤー/敵生成・アクター更新
 - `js/physics/terrain.js`: 足場・通常/異常落下・樽/床横衝突・梯子範囲・画面端ループ判定（純粋関数群）
 - `js/entities/player.js`: プレイヤー状態・移動・落下・梯子・ハンマー・硬直制御
+- `js/entities/enemy.js`: 敵共通土台（スポーン・節目イベント発火・移動・梯子昇降・落下・スタン・`registerAI`）
 - `js/stage/symbols.js`: ステージ記号定義・壁初期HP
 - `js/stage/stage.js`: `{ floor, objects }` 解析・検証・耐久値管理・`toData()`
 - `js/data/stages/stage01.js`: ステージ1定義（2レイヤー）
 - `js/render/screen.js`: Canvas初期化・整数倍拡大
-- `js/render/sprites.js`: 仮スプライト描画（壁ひび割れ・異常落下点滅・硬直表示・両側描画）
+- `js/render/sprites.js`: 仮スプライト描画（壁ひび割れ・異常落下点滅・スタン表示・両側描画）
 - `js/render/renderer.js`: Stage とアクターの描画
-- `tests/run.js` / `tests/smoke.js`: Node標準機能のみで動くロジックテスト（105件）＆偽DOM起動テスト（17件）
+- `tests/run.js` / `tests/smoke.js`: Node標準機能のみで動くロジックテスト（113件）＆偽DOM起動テスト（17件）
 
 ### 今後追加する予定のフォルダ
-- `js/ai/`（敵の判断ロジック）、`js/entities/`（敵本体）、`js/objects/`（梯子破壊・落下樽・鉄柱・爆弾・扉・火の玉）、`js/editor/`（ステージエディタ）、`js/audio/`（サウンド）
+- `js/ai/`（敵の判断ロジック: `chaser.js` / `runner.js` / `foreman.js`）、`js/objects/`（梯子破壊・落下樽・鉄柱・爆弾・扉・火の玉）、`js/editor/`（ステージエディタ）、`js/audio/`（サウンド）
 
 ### 読み込み順（`index.html` / `tests/smoke.js` で検証）
-`config` → `stage/symbols` → `stage/stage` → `data/stages/stage01` → `core/input` → `core/touch` → `core/loop` → `physics/terrain` → `entities/player` → `core/game` → `render/screen` → `render/sprites` → `render/renderer` → `main`
+`config` → `stage/symbols` → `stage/stage` → `data/stages/stage01` → `core/input` → `core/touch` → `core/loop` → `physics/terrain` → `entities/player` → `entities/enemy` → `core/game` → `render/screen` → `render/sprites` → `render/renderer` → `main`
 
 ---
 
@@ -134,45 +137,35 @@
 
 ### 6.2 主要データ構造
 - **Stage**（`RK.Stage.parse(name, data)` の戻り値）:
-  - `name`, `cols`（16）, `rows`（9）
-  - `floors[row][col]`: `'floor' | 'empty'`
-  - `cells[row][col]`: symbol id（`empty / floor / wall_a / wall_b / wall_c / ladder / ladder_solid / barrel / pillar / bomb / door / player / chaser / runner / foreman / fast_chaser`）
-  - `hp[row][col]`: 残り耐久値（0 = 耐久値なし/破壊済み）
-  - `spawns`: `[{ id, col, row }]`（アクターはパース時に `cells` から除かれ `empty` になる）
-  - `errors`: `string[]`（空なら正常、例外は投げない）
+  - `name`, `cols`（16）, `rows`（9）, `floors[row][col]`（`'floor' | 'empty'`）, `cells[row][col]`（symbol id）, `hp[row][col]`（残り耐久値）, `spawns`（`[{ id, col, row }]`）, `errors`（`string[]`）
 - **Player**（`RK.Player.create(stage, spawn)` の戻り値）:
-  - `id: 'player'`, `x`, `y`, `w`（12）, `h`（24）, `facing`（`-1|1`）
-  - `mode`: `'ground' | 'fall' | 'abnormal_fall' | 'ladder'`
-  - `ladderCol`: `'ladder'` 中に乗っている梯子の列（それ以外は `-1`）
-  - `stepDir`, `stepTick`: チョン移動の内部カウンタ
-  - `hammerFrames`, `hammerLockFrames`, `hammerCooldown`: ハンマー表示・歩行ロック・再使用クールタイムの残りtick
-  - `stunFrames`: 異常落下着地後の行動不可残りtick（30）
-  - `invincible`: 無敵フラグ（`'abnormal_fall'` 中のみ `true`、着地と同時に `false`）
-- **入力スナップショット**（`input.poll()` の戻り値）:
-  - `dx`, `dy`（`-1|0|1`、上は `-1`、左右同時押しは `0`）、`dxPressed`, `dyPressed`、`hammer`, `hammerPressed`
+  - `id: 'player'`, `x`, `y`, `w`（12）, `h`（24）, `facing`（`-1|1`）, `mode`（`'ground' | 'fall' | 'abnormal_fall' | 'ladder'`）, `ladderCol`, `stepDir`, `stepTick`, `hammerFrames`, `hammerLockFrames`, `hammerCooldown`, `stunFrames`, `invincible`
+- **Enemy**（`RK.Enemy.create(stage, spawn)` の戻り値）:
+  - `id`（`'chaser' | 'runner' | 'foreman' | 'fast_chaser'`）, `x`, `y`, `w`（12）, `h`（24）, `facing`（`-1|1`）, `dirX`（`-1|0|1`）, `dirY`（`-1|0|1`）, `mode`（`'ground' | 'fall' | 'abnormal_fall' | 'ladder'`）, `ladderCol`, `stunFrames`, `invincible`, `speedBoost`（`0..2`）, `hammerFrames`, `pauseFrames`
 - **Game**（`RK.Game.create(stageData)` の戻り値）:
-  - `{ stage, player, actors: [...], tick }`
+  - `{ stage, player, enemies: [...], actors: [...], tick }`
 
 ### 6.3 各モジュールの公開API
 | 名前 | 主なメソッド・プロパティ |
 |---|---|
-| `RK.CONFIG` | `CELL_W`(16) `CELL_H`(24) `COLS`(16) `ROWS`(9) `WIDTH`(256) `HEIGHT`(216) `BG_COLOR` `FLOOR_DRAW_H`(4) `TICK_HZ`(60) `PLAYER_*` `WALL_A_HP` `WALL_B_HP` `WALL_C_HP` `HAMMER_FRAMES` `HAMMER_LOCK_FRAMES` `HAMMER_COOLDOWN_FRAMES` `LADDER_GRAB_DOTS` |
+| `RK.CONFIG` | `CELL_W`(16) `CELL_H`(24) `COLS`(16) `ROWS`(9) `WIDTH`(256) `HEIGHT`(216) `BG_COLOR` `FLOOR_DRAW_H`(4) `TICK_HZ`(60) `PLAYER_*` `ENEMY_*` `FAST_CHASER_SPEED` `WALL_A_HP` `WALL_B_HP` `WALL_C_HP` `HAMMER_FRAMES` `HAMMER_LOCK_FRAMES` `HAMMER_COOLDOWN_FRAMES` `LADDER_GRAB_DOTS` |
 | `RK.Symbols` | `LAYER`（`NONE / FLOOR / OBJECT / ACTOR`）, `defs`, `byChar`, `byId` |
-| `RK.Stage` | `Stage`, `parse(name, data)`。メソッド: `inBounds(c,r)` `wrapCol(c)` `idAt(c,r)` `hpAt(c,r)` `maxHpAt(c,r)` `hasFloor(c,r)` `surfaceY(r)` `colAt(x)` `rowAtFeet(y)` `centerX(c)` `setId(c,r,id)` `setFloor(c,r,v)` `damageCell(c,r,amount)`（`{ hit, destroyed, hp }`） `toData()` |
+| `RK.Stage` | `Stage`, `parse(name, data)`。メソッド: `inBounds(c,r)` `wrapCol(c)` `idAt(c,r)` `hpAt(c,r)` `maxHpAt(c,r)` `hasFloor(c,r)` `surfaceY(r)` `colAt(x)` `rowAtFeet(y)` `centerX(c)` `setId(c,r,id)` `setFloor(c,r,v)` `damageCell(c,r,amount)` `toData()` |
 | `RK.Input` | `create()` → `{ set(source, name, down), releaseAll(source), poll() }`, `attachKeyboard(input, window)`, `KEYMAP`, `NAMES` |
 | `RK.Touch` | `attach(input, { stick, knob, hammer })` |
 | `RK.Loop` | `createStepper(update)` → `{ advance(dtMs) }`, `start(update, render)`, `STEP_MS`, `MAX_DT`, `MAX_STEPS` |
 | `RK.Player` | `create(stage, spawn)`, `update(p, input, stage)`, `moveX(p, d, stage?, solidFloor?)`, `startAbnormalFall(p)` |
+| `RK.Enemy` | `ENEMY_IDS`, `isEnemyId(id)`, `registerAI(id, fn(e, event, game))`, `create(stage, spawn)`, `update(e, game)`, `startFall(e)`, `startAbnormalFall(e)`, `triggerAI(e, event, game)` |
 | `RK.Physics` | `isSupported(stage, x, y, bw)`, `isAbnormalSupported(stage, x, y, bw)`, `fallTo(stage, x, bw, y, dist)`, `abnormalFallTo(stage, x, bw, y, dist)`, `ladderSpan(stage, col, y)`, `ladderColAt(stage, x, row)`, `blockedX(stage, nx, y, bw, bh, dir)`, `blockedByFloorX(stage, nx, y, bw, dir)`, `wrapX(x)` |
 | `RK.Game` | `create(stageData)`, `update(game, input)` |
 | `RK.Screen` | `init(canvas)`, `fit()`, `ctx`, `scale` |
 | `RK.Sprites` | `register(id, fn(ctx,x,y,w,h,hp?,maxHp?))`, `draw(ctx,id,x,y,w,h,hp?,maxHp?)`, `drawActor(ctx, actor)`, `drawers` |
-| `RK.Renderer` | `drawStage(ctx, stage, actors?)`（`actors` 省略時は `spawns` を仮描画）, `showGrid`, `drawGrid` |
+| `RK.Renderer` | `drawStage(ctx, stage, actors?)`, `showGrid`, `drawGrid` |
 
 ### 6.4 1フレームの流れ & DOM ID
 - **DOM ID**: `screen`（canvas）, `status`, `errors`, `btn-grid`, `stick`, `stick-knob`, `btn-hammer`（デバッグ用に `RK.game`, `RK.stage`, `RK.input` を公開）。
-- **処理順**: 入力デバイス → `RK.Input.set` → 1/60秒ごとに `Game.update(game, input.poll())` → `Player.update`（タイマー減算・`invincible` 同期 → `'abnormal_fall'` 処理 / 足場確認 → `'fall'` / `'ladder'` / `'ground'` の各処理 → 足場外れで通常落下開始）。
-- **描画順**: 物（奥の壁等） → アクター（キャラ＋奥振りハンマー） → 床（足元4ドットに重なる帯） → グリッド線。
+- **処理順**: 入力デバイス → `RK.Input.set` → 1/60秒ごとに `Game.update(game, input.poll())` → `Player.update` → `Enemy.update`（全敵）。
+- **描画順**: 物（奥の壁等） → アクター（プレイヤー＋敵＋ハンマー） → 床（足元4ドットに重なる帯） → グリッド線。
 
 ---
 
@@ -188,33 +181,34 @@
 - **物レイヤー**: `.` 空 / `W` 壁A(耐久1) / `w` 壁B(耐久2) / `V` 壁C(耐久3) / `L` 梯子(破壊可) / `H` 梯子(破壊不可) / `O` 樽 / `I` 鉄柱 / `B` 爆弾 / `D` 扉 / `P` プレイヤー(必須1つ) / `1` Chaser / `2` Runner / `3` Foreman / `4` Fast Chaser
 - **stage01 ルール**: 行0,1はHUD用の空き。行2,4,6,8の下端（`y=72,120,168,216`）に足場面。テストは `stage01` の配置に依存させず `mkStage()` 等を使うこと。
 
-### 操作感パラメータ（`js/config.js`）
+### 操作感・敵パラメータ（`js/config.js`）
 | 定数 | 値 | 区分・意味 |
 |---|---|---|
 | `PLAYER_W` / `PLAYER_H` | 12 / 24 | 確定。当たり幅・高さ |
 | `PLAYER_SPEED` | 1 | 暫定。押し続け時の速さ（ドット/tick） |
-| `PLAYER_TAP_DOTS` / `TAP_FRAMES` | 3 / 6 | 暫定。チョン押しで進むドット数と所要tick（押した瞬間に確定し途中離しでも最後まで進む） |
+| `PLAYER_TAP_DOTS` / `TAP_FRAMES` | 3 / 6 | 暫定。チョン押しで進むドット数と所要tick |
 | `PLAYER_FALL_SPEED` | 2 | 暫定。通常落下速度（ドット/tick、加速なし） |
 | `PLAYER_ABNORMAL_FALL_SPEED` | 2 | 確定。異常落下速度（ドット/tick） |
 | `PLAYER_ABNORMAL_LAND_STUN_FRAMES` | 30 | 確定（調整可）。異常落下着地後の硬直tick数（0.5秒） |
 | `PLAYER_CLIMB_SPEED` | 1 | 暫定。梯子昇降速度（ドット/tick） |
 | `LADDER_GRAB_DOTS` | 4 | 暫定。梯子中心からのつかまり許容範囲（ドット） |
 | `WALL_A_HP` / `B` / `C` | 1 / 2 / 3 | 確定。壁 `W` / `w` / `V` の初期耐久値 |
-| `HAMMER_FRAMES` | 12 | 確定。ハンマー表示tick数 |
-| `HAMMER_LOCK_FRAMES` | 18 | 確定。ハンマー後の歩行・梯子ロックtick数（0.3秒） |
-| `HAMMER_COOLDOWN_FRAMES` | 18 | 確定。次のハンマーを振れるまでのtick数（0.3秒） |
-
-- タッチスティック（`touch.js`）: 4方向、不感帯は半径の30%、軸切り替えは反対軸が1.25倍を超えるまで粘る。
+| `HAMMER_FRAMES` / `LOCK` / `COOLDOWN` | 12 / 18 / 18 | 確定。ハンマー表示・歩行ロック・クールタイム（tick） |
+| `ENEMY_W` / `ENEMY_H` | 12 / 24 | 暫定。敵の当たり幅・高さ |
+| `ENEMY_SPEED` / `FAST_CHASER_SPEED` | 1 / 2 | 暫定。通常敵・Fast Chaser の基本移動速度（ドット/tick） |
+| `ENEMY_CLIMB_SPEED` / `FALL_SPEED` | 1 / 2 | 暫定。敵の梯子昇降速度・落下速度（ドット/tick） |
+| `ENEMY_FALL_STUN_FRAMES` / `ABNORMAL` | 60 / 60 | 暫定。敵の通常・異常落下後のスタンtick数（親方は対象外） |
 
 ---
 
 ## 8. 進捗
 - [x] **0〜2**: 座標系（256×216、16×24セル）、2レイヤー解析・検証、仮スプライト・グリッド表示
-- [x] **3〜4**: 60Hzループ、入力統一・タッチUI、左右移動（チョン＋連続）、樽横衝突、床判定・通常落下（落下は実機確認済み、タッチ操作感は未確認）
-- [x] **5〜6**: 梯子昇降（床すり抜け条件・穴てっぺん壁制限含む）、画面端左右ループ（実機確認は未了）
+- [x] **3〜4**: 60Hzループ、入力統一・タッチUI、左右移動（チョン＋連続）、樽横衝突、床判定・通常落下
+- [x] **5〜6**: 梯子昇降（床すり抜け条件・穴てっぺん壁制限含む）、画面端左右ループ
 - [x] **7**: ハンマー攻撃（`ground` のみ・画面奥1セル・同時破壊なし・ロックとクールタイム分離）と壁3種の耐久値・ひび割れ破壊（`run.js` 100件通過）
-- [x] **8a**: 異常落下（`abnormal_fall`、途中の床・樽すり抜け、落下中無敵、着地で即無敵解除＆0.5秒硬直、`run.js` 105件・`smoke.js` 17件通過）
-- [ ] **8b**: Chaser → Runner → Foreman → Fast Chaser（および破壊可能な梯子 `L` の破壊）
+- [x] **8a**: 異常落下（`abnormal_fall`、途中の床・樽すり抜け、落下中無敵、着地で即無敵解除＆0.5秒硬直、`run.js` 105件通過）
+- [x] **8b-1**: 敵の共通土台（`js/entities/enemy.js`。スポーン・節目イベント発火・移動・梯子昇降・通常/異常落下・親方除外スタン、`run.js` 113件通過）
+- [ ] **8b-2**: Chaser → Runner → Foreman → Fast Chaser の個別AI実装（および破壊可能な梯子 `L` の破壊）
 - [ ] **9**: 樽（落下）・鉄柱・爆弾・扉
 - [ ] **10**: 火の玉・ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）
 - [ ] **11**: ステージエディタ（スマホ対応）
@@ -223,19 +217,19 @@
 ---
 
 ## 9. 未決事項（決定したら §4 へ移動）
-1. **破壊可能な梯子（`L`）の破壊と連鎖**（ステップ8bで決定）: プレイヤーのハンマーでも `L` を壊せるか（親方 Foreman のみか）、および `L` を叩いたとき1セルだけ壊れるか上下の `L` が連鎖して壊れるか。
-2. **敵のドット連続移動の細部**（ステップ8bで整理）: 梯子の乗り降りや扉の出入りを整数ドット連続移動とセル単位判断でどう接続するか。
+1. **Chaser / Runner / Foreman / Fast Chaser の個別AI判断詳細**（ステップ8b-2で実装）: 各節目（`spawn` / `cell_center` / `blocked` / `ladder_floor` / `land`）での具体的な分岐条件（梯子選択基準、崖端で落ちるか反転するか、親方の破壊対象と停止時間など）。
+2. **破壊可能な梯子（`L`）の破壊と連鎖**（ステップ8b-2で決定）: プレイヤーのハンマーでも `L` を壊せるか（親方 Foreman のみか）、および `L` を叩いたとき1セルだけ壊れるか上下の `L` が連鎖して壊れるか。
 3. **横方向の衝突（残り）**（ステップ9で決定）: 鉄柱 `I`・扉 `D`・爆弾 `B` を横に通れるか（樽は不可、壁は可で確定済み）。
 4. **物レイヤーの重ね・床の描画順**: 壁と鉄柱の重ねが必要になった場合のレイヤー拡張、およびドット絵化時の描画順見直し。
 5. **画面端ループ・はみ出し描画の見え方**: 中心 `x` 基準での反転タイミングやキャンバス外はみ出しの見え方を実機確認して調整。
-6. **暫定パラメータの最終調整**: §7 の移動・落下・梯子速度、スティック形式（固定/浮動）、通常落下中の左右入力可否（暫定: 無視）、画面下端の扱い（暫定: `y=216` は常に足場）、樽の当たり形状（暫定: 16×24全体）、落下中の下入力（暫定: つかまらない）を実機プレイで調整。
+6. **暫定パラメータの最終調整**: §7 の移動・落下・梯子速度、敵速度・スタン時間、スティック形式、通常落下中の左右入力可否、画面下端の扱い、樽の当たり形状を実機プレイで調整。
 
 ---
 
 ## 10. 引き継ぎ・テスト手順 & 変更ログ
 - **新規チャット開始時のプロンプト例**:
-  > 添付の context.md を読んで、「進捗」の次のステップ（8b）から続けて。既存のコードが必要なファイルは先に言って。作業後は context.md を更新して全文を出して。
+  > 添付の context.md を読んで、「進捗」の次のステップ（8b-2）から続けて。既存のコードが必要なファイルは先に言って。作業後は context.md を更新して全文を出して。
 - **完了時確認**: プロジェクトフォルダに上書き後、`node tests/run.js` と `node tests/smoke.js` を実行して全件パスすることを確認する。
 - **変更ログ**:
   - ステップ0〜8a完了（`tests/run.js` 105件・`tests/smoke.js` 17件全通過）。
-  - `context.md` を新規チャット引き継ぎ用の最小構成に整理・圧縮（完了済み履歴・重複記述を削減し、内部フェンスドコードブロックを廃止）。
+  - ステップ8b-1完了: `js/entities/enemy.js` を新規作成し、`config.js` / `game.js` / `sprites.js` / `index.html` / `tests/run.js`（計113件）を更新。セルの節目イベント（`spawn` / `cell_center` / `blocked` / `ladder_floor` / `land` / `abnormal_recover`）でAI判断を呼び出す共通土台を構築。
