@@ -18,9 +18,9 @@
   - 異常落下（`mode: 'abnormal_fall'`。途中の床や途中の段の樽を無視し、一番下の床またはその上の樽まで落下。落下中は無敵、着地で即座に無敵解除＆0.5秒の着地硬直）。
   - 敵の共通土台（`js/entities/enemy.js`）: 敵4種（`chaser` / `runner` / `foreman` / `fast_chaser`）のスポーン・描画、節目イベント（`spawn` / `cell_center` / `blocked` / `ladder_floor` / `land` / `stun_end`）、サブピクセル累積による整数ドット移動、梯子昇降、通常落下（スタンなし・即行動再開）、異常落下（親方以外は着地スタン）、速度段階上昇。
   - Chaser & Fast Chaser AI（`js/ai/chaser.js`）: 決定的な追跡アルゴリズム実装完了（同高さ追跡＋間の樽反転、梯子のマス／直上マスでの限定再判定、水平到達可能性チェック付き梯子選択、非ループ距離最短・同距離左優先、行き止まり梯子の登頂＆てっぺん到達後の1段下降→通常アルゴリズム復帰、有効梯子なしの左樽判定、障害物反転・梯子付近循環停止＋`needsReeval`、通常落下着地時＆異常落下スタン終了時再判定、Fast Chaser 共通化）。
-  - **Runner AI（`js/ai/runner.js`）**: 決定的な巡回アルゴリズム実装完了（プレイヤー非依存、`stageData.runnerDir` による初期左右方向、`horizontalNext` による縦移動直後の横移動優先処理、初回下優先・記録更新型の梯子上下移動、行き止まり梯子の登頂＆てっぺん到達後の1段下降→下向き傾向 `runnerVertical = 1` での通常アルゴリズム復帰、樽での反転＆左右挟まれ停止）。
+  - **Runner AI（`js/ai/runner.js`）**: 決定的な巡回アルゴリズム実装完了（プレイヤー非依存、`stageData.runnerDir` による初期左右方向、`horizontalNext` による縦移動直後の横移動優先処理、初回下優先・記録更新型の梯子上下移動、行き止まり梯子の登頂＆てっぺん到達後の1段下降→下向き傾向 `runnerVertical = 1` での通常アルゴリズム復帰、樽での反転＆左右挟まれ停止）。`index.html` で `runner.js` が `enemy.js` より前に読み込まれていた不具合も修正済み。
 - **未実装**: Foreman（`foreman`）の個別AI判断ロジック、破壊可能な梯子 `L`・鉄柱・爆弾・扉の破壊や挙動、落下する樽、火の玉、ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）、ステージエディタ、ドット絵・サウンド。
-- **次の作業**: まず §9 の「0. 未確認の不具合」と「テスト整理」を片付けてから、**ステップ8b-4**（Foreman の個別AI判断ロジック実装、および破壊可能な梯子 `L` の破壊・異常落下連動）。
+- **次の作業**: まず §9 の「0. 未確認の不具合・要整理（テスト整理）」を片付けてから、**ステップ8b-4**（Foreman の個別AI判断ロジック実装、および破壊可能な梯子 `L` の破壊・異常落下連動）。
 - **テスト**: `node tests/run.js` と `node tests/smoke.js`。**注意**: 修正セッション（8b-3修正）時点で、渡された `run.js` は元から約20件失敗していた（§9-0参照）。修正後は新規12件を含め 125 件通過。残り失敗は既存の古い期待値で、今回の修正とは無関係（`smoke.js` は未確認）。
 
 ## 1. 作業ルール（AI への指示）
@@ -219,7 +219,7 @@
 - [x] **8b-1**: 敵の共通土台（`js/entities/enemy.js`。スポーン・節目イベント発火・移動・梯子昇降・通常/異常落下・親方除外スタン、`run.js` 113件通過）
 - [x] **8b-2**: Chaser & Fast Chaser の行動アルゴリズム実装（`js/ai/chaser.js`、`run.js` 128件通過）
 - [x] **8b-3**: Runner の行動アルゴリズム実装（`js/ai/runner.js`、`run.js` 138件通過）
-- [x] **8b-3 修正**: 敵の通常落下スタンを廃止／プレイヤーの「床の上から下入力で梯子へ降りる」(B) を追加（A は既存）／`RUNNER_SPEED`・`runnerDir`・Runner初期フィールドの欠落を補完／AI未登録の警告を追加（`run.js` 新規12件）
+- [x] **8b-3 修正**: 敵の通常落下スタンを廃止／プレイヤーの「床の上から下入力で梯子へ降りる」(B) を追加（A は既存）／`RUNNER_SPEED`・`runnerDir`・Runner初期フィールドの欠落を補完／AI未登録の警告を追加／`index.html` の `runner.js` 読み込み順を修正（`run.js` 新規12件）
 - [ ] **8b-4**: Foreman の個別AI実装、および破壊可能な梯子 `L` の破壊・異常落下連動
 - [ ] **9**: 樽（落下）・鉄柱・爆弾・扉
 - [ ] **10**: 火の玉・ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）
@@ -230,7 +230,7 @@
 
 ## 9. 未決事項（決定したら §4 へ移動）
 0. **未確認の不具合・要整理（8b-3修正セッションで判明）**:
-   - **Runner が梯子を一切使わない（ブラウザ実機）**: 渡されたコード＋`stage01` を Node で動かすと、Runner は梯子を使える（昇り・床をすり抜けて降りる・行き止まり梯子とも）。原因はコード外の可能性が高い。**`index.html`（`ai/runner.js` が `entities/enemy.js` より後で読まれているか）と `main.js`、`symbols.js`（`2` → `runner`）を確認する。** 未登録なら Runner は仮AI（直進のみ）で動くため、`enemy.js` が実機コンソールに警告 `[RK] runner のAIが未登録…` を1度出す。
+   - ~~**Runner が梯子を一切使わない（ブラウザ実機）**~~: **解決済み**。`index.html` で `<script src="js/ai/runner.js"></script>` が `js/entities/enemy.js` より前に書かれていたため `RK.Enemy` 未定義でAI登録がスキップされていた。`ai/chaser.js` の直後へ移動して修正。
    - **通常落下でも速度段階が上がるか**: 現状コードと既存テストは「上がる」。仕様書の「落下経験」の解釈として要確認（スタンしないことは確定）。
    - **`run.js` の古い期待値（約11件）**: チェイサー/ランナー系で、現行コードと前提が合わない（例: 行き止まり梯子の高さ＝2セル梯子なら頂上は y=168 だがテストは 192 を期待／チェイサーの方向が 8b-1 当時の仮AIのまま／落下までの待ちtick不足／§6 テストで `t` 未定義）。加えて `P のスポーン位置` テストは `stage01` の配置に依存して失敗。今回の修正とは無関係。どれが期待値側の誤りかを1件ずつ確認して直す。
 1. **Foreman の個別AI判断詳細**（ステップ8b-4で実装）: 停止時間・移動速度・ハンマー破壊射程・対象優先度・行動パターン。
@@ -248,5 +248,6 @@
 - **完了時確認**: プロジェクトフォルダに上書き後、`node tests/run.js` と `node tests/smoke.js` を実行して全件パスすることを確認する。
 - **変更ログ**:
   - ステップ0〜8b-2完了（`tests/run.js` 128件・`tests/smoke.js` 17件全通過）。
+  - ステップ8b-3 修正（実機不具合）: `index.html` の `<script src="js/ai/runner.js"></script>` を `js/entities/enemy.js` および `js/ai/chaser.js` の後へ移動し、ブラウザ実機で Runner AI が正しく登録されるよう修正。
   - ステップ8b-3 修正: `js/entities/enemy.js`（通常落下の着地スタン廃止・`runnerVertical` / `horizontalNext` の初期化・Runner 速度 `RUNNER_SPEED`・AI未登録警告）、`js/config.js`（`RUNNER_SPEED` 追加・`ENEMY_FALL_STUN_FRAMES` 廃止）、`js/core/game.js`（`stage.runnerDir` 付与）、`js/entities/player.js`（床の上から下入力で真下の梯子に降りる B 追加）、`tests/run.js`（旧仕様の2件を新仕様へ書き換え・通常落下スタンのテストの待ちtick延長・新規12件）。
   - ステップ8b-3完了: `js/ai/runner.js` 新規作成、`js/ai/chaser.js` / `js/entities/enemy.js` / `js/config.js` / `js/core/game.js` / `index.html` / `tests/run.js`（計138件）更新。行き止まり梯子の登頂とてっぺん到達時の1段下降（ランナーは `runnerVertical=1` で通常アルゴリズム復帰、チェイサーは通常アルゴリズム復帰）を反映。
