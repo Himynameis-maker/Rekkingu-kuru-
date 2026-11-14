@@ -1,11 +1,11 @@
-/* ===== 敵の共通土台（ステップ8b） =====
+/* ===== 敵の共通土台（ステップ8b-4） =====
  * 座標系・地形判定・落下状態はプレイヤーと共通（中心x + 足y、整数ドット）。
- * AI（方向転換・梯子選択）は毎フレーム実行せず、「グリッドの節目（イベント）」でのみ呼び出す:
+ * AI（方向転換・梯子選択）は「グリッドの節目（イベント）」および親方のtickフックで呼び出す:
  *   - 'spawn'        : スポーン直後
- *   - 'cell_center'  : 地上歩行中にセルの中心（x === stage.centerX(col)）へ到達した瞬間
+ *   - 'cell_center'  : 地上歩行中にセルの中心（x === stage.centerX(col)）へ到達した瞬間（または再判定要求時）
  *   - 'blocked'      : 地上歩行中に障害物（樽など）で進めなくなった瞬間
  *   - 'ladder_floor' : 梯子昇降中に床の高さ（y % CELL_H === 0）または梯子端へ到達した瞬間
- *   - 'land'         : 通常落下から着地した瞬間（スタン・速度段階上昇ともにしない）
+ *   - 'land'         : 通常落下または梯子消滅で床に着地した瞬間（スタン・速度段階上昇ともにしない）
  *   - 'stun_end'     : 着地後のスタンが終了した瞬間（異常落下後の再判定などに使用）
  *
  * 各敵種（chaser / runner / foreman / fast_chaser）の判断ロジックは registerAI(id, fn) で差し込む。
@@ -44,20 +44,23 @@
       speedBoost: 0,                      // 異常落下経験による速度上昇段階（0〜2。親方は未使用）
       moveAccum: 0,                       // サブピクセル移動累積（整数ドット移動を決定的に維持）
       climbAccum: 0,                      // サブピクセル梯子昇降累積（整数ドット移動を決定的に維持）
-      needsReeval: false,                 // 再判定フラグ（梯子付近の停止・循環時などに使用）
+      needsReeval: false,                 // 再判定フラグ（梯子付近の停止・循環時・親方の方向転換トリガー時）
       runnerVertical: null,               // Runner用: 縦移動の優先方向（null=未決定 / -1=上 / 1=下）
       horizontalNext: false,              // Runner用: 縦移動直後は横移動を最優先するフラグ
       hammerFrames: 0,                    // 親方のハンマー表示残りtick
       pauseFrames: 0,                     // 親方の行動切替停止残りtick
+      foremanPhase: 'patrol',             // 親方用: 'patrol' | 'periodic_pause' | 'spot_pause' | 'swing_wait'
+      foremanWalkTimer: 0,                // 親方用: 次の定期立ち止まりまでの移動残りtick（4〜6s）
+      foremanCheckTick: 0,                // 親方用: 荒い接近・高さ合わせチェックカウンタ（0..3）
     };
   }
 
   /** 現在の移動速度（ドット/tick） */
   function currentSpeed(e) {
+    if (e.id === 'foreman') return C.FOREMAN_SPEED !== undefined ? C.FOREMAN_SPEED : 1.1;
     let base = C.ENEMY_SPEED;
     if (e.id === 'fast_chaser') base = C.FAST_CHASER_SPEED;
     else if (e.id === 'runner') base = C.RUNNER_SPEED;
-    if (e.id === 'foreman') return base;
     return base + e.speedBoost * (C.ENEMY_SPEED_BOOST_STEP || 0);
   }
 
@@ -78,7 +81,7 @@
     e.dirY = 0;
   }
 
-  /** 異常落下開始（梯子破壊・爆発など）。落下中は無敵 */
+  /** 異常落下開始（梯子破壊・壁破壊・爆発など）。落下中は無敵 */
   function startAbnormalFall(e) {
     e.mode = 'abnormal_fall';
     e.wasAbnormalFall = true;
@@ -87,6 +90,10 @@
     e.climbAccum = 0;
     e.dirY = 0;
     e.stunFrames = 0;
+    e.pauseFrames = 0;
+    if (e.id === 'foreman') {
+      e.foremanPhase = 'patrol';
+    }
   }
 
   /** 梯子に乗る（x を梯子中心へスナップ） */
@@ -107,7 +114,6 @@
     if (decision.dirY !== undefined && decision.dirY !== 0) {
       const dy = decision.dirY > 0 ? 1 : -1;
       const col = e.mode === 'ladder' ? e.ladderCol : stage.wrapCol(stage.colAt(e.x));
-      // 上へ昇る場合は足元の行、下へ降りる場合は足の下の行に梯子があるか確認
       const checkY = dy < 0 ? e.y : e.y + 1;
       const span = RK.Physics.ladderSpan(stage, col, checkY);
       if (span && ((dy < 0 && e.y > span.top) || (dy > 0 && e.y < span.bottom))) {
@@ -119,7 +125,6 @@
     if (decision.dirX !== undefined) {
       const dx = decision.dirX === 0 ? 0 : (decision.dirX > 0 ? 1 : -1);
       if (e.mode === 'ladder') {
-        // 梯子から横へ降りる（足場がある場合のみ）
         if (RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
           e.mode = 'ground';
           e.ladderCol = -1;
@@ -147,8 +152,8 @@
     return null;
   }
 
-  /** 個別AIが実装済みの敵種。登録されていなければ読み込み順の誤りなので、コンソールに1度だけ警告する */
-  const IMPLEMENTED_AI = ['chaser', 'runner', 'fast_chaser'];
+  /** 個別AIが実装済みの敵種 */
+  const IMPLEMENTED_AI = ['chaser', 'runner', 'foreman', 'fast_chaser'];
   const warnedMissingAI = {};
 
   /** グリッドの節目（イベント）でAIを呼び出す */
@@ -157,7 +162,7 @@
     if (!fn) {
       if (IMPLEMENTED_AI.indexOf(e.id) >= 0 && !warnedMissingAI[e.id] && typeof console !== 'undefined') {
         warnedMissingAI[e.id] = true;
-        console.warn('[RK] ' + e.id + ' のAIが未登録のため仮AI（直進のみ）で動きます。index.html の読み込み順（entities/enemy → ai/chaser → ai/runner）を確認してください。');
+        console.warn('[RK] ' + e.id + ' のAIが未登録のため仮AI（直進のみ）で動きます。index.html の読み込み順を確認してください。');
       }
       fn = defaultDecide;
     }
@@ -174,7 +179,6 @@
     }
     if (e.stunFrames > 0 || e.pauseFrames > 0) return;
 
-    // 停止中（dirX === 0）でも再判定フラグが立っていればセル中心イベントで再評価できる
     if (e.dirX === 0) {
       if (e.needsReeval) {
         triggerAI(e, 'cell_center', game);
@@ -187,7 +191,7 @@
     e.moveAccum -= steps;
 
     for (let i = 0; i < steps; i++) {
-      if (e.mode !== 'ground' || e.dirX === 0) break;
+      if (e.mode !== 'ground' || e.dirX === 0 || e.pauseFrames > 0) break;
       const dir = e.dirX > 0 ? 1 : -1;
       e.facing = dir;
       const nx = e.x + dir;
@@ -199,12 +203,11 @@
 
       e.x = RK.Physics.wrapX(nx);
 
-      // セル中心の節目に到達したらAI判断（穴の上の梯子降り判定を含むため足場チェック前に評価）
       const col = stage.colAt(e.x);
       if (e.x === stage.centerX(col)) {
         const prevDirX = e.dirX;
         triggerAI(e, 'cell_center', game);
-        if (e.mode !== 'ground' || e.dirX !== prevDirX) break;
+        if (e.mode !== 'ground' || e.dirX !== prevDirX || e.pauseFrames > 0) break;
       }
 
       if (!RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
@@ -217,7 +220,6 @@
   /** 梯子上での1tick更新 */
   function updateLadder(e, game) {
     const stage = game.stage;
-    // 上昇中は足元の行、下降中は足の下の行も含めて梯子連続性を確認
     const checkY = e.dirY > 0 ? e.y + 1 : e.y;
     const span = RK.Physics.ladderSpan(stage, e.ladderCol, checkY) || RK.Physics.ladderSpan(stage, e.ladderCol, e.y);
     if (!span) {
@@ -226,18 +228,23 @@
     }
     if (e.stunFrames > 0 || e.pauseFrames > 0) return;
 
+    // 親方がハシゴ上でプレイヤー高さにピタッと合わせて停止中（dirY === 0）の場合
+    if (e.dirY === 0) {
+      e.climbAccum = 0;
+      return;
+    }
+
     e.climbAccum += currentClimbSpeed(e);
     const steps = Math.floor(e.climbAccum + 1e-9);
     e.climbAccum -= steps;
 
     for (let i = 0; i < steps; i++) {
-      if (e.mode !== 'ladder' || e.dirY === 0) break;
+      if (e.mode !== 'ladder' || e.dirY === 0 || e.pauseFrames > 0) break;
       const dy = e.dirY > 0 ? 1 : -1;
       const ny = Math.min(Math.max(e.y + dy, span.top), span.bottom);
 
       if (ny === e.y) {
         triggerAI(e, 'ladder_floor', game);
-        // 梯子の端でまだ ladder モードのままなら、足場があれば地上へ降りる
         if (e.mode === 'ladder' && RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
           e.mode = 'ground';
           e.ladderCol = -1;
@@ -251,11 +258,10 @@
       e.y = ny;
       e.x = stage.centerX(e.ladderCol);
 
-      // 床の高さ（CELL_Hの倍数）に到達したらAI判断
       if (e.y % C.CELL_H === 0) {
         const prevDirY = e.dirY;
         triggerAI(e, 'ladder_floor', game);
-        if (e.mode !== 'ladder' || e.dirY !== prevDirY) break;
+        if (e.mode !== 'ladder' || e.dirY !== prevDirY || e.pauseFrames > 0) break;
       }
     }
   }
@@ -267,7 +273,6 @@
     if (r.landed) {
       e.mode = 'ground';
       e.wasAbnormalFall = false;
-      // 通常落下ではスタンも加速（speedBoost上昇）もしない
       triggerAI(e, 'land', game);
     }
   }
@@ -280,12 +285,12 @@
     if (r.landed) {
       e.mode = 'ground';
       e.invincible = false;
-      if (e.id !== 'foreman') {
+      if (e.id === 'foreman') {
+        // 親方は加速せず、プレイヤーと同じ時間だけ異常落下スタンする
+        e.stunFrames = C.PLAYER_ABNORMAL_LAND_STUN_FRAMES;
+      } else {
         e.stunFrames = C.ENEMY_ABNORMAL_LAND_STUN_FRAMES;
         e.speedBoost = Math.min(2, e.speedBoost + 1);
-      } else {
-        e.wasAbnormalFall = false;
-        triggerAI(e, 'stun_end', game);
       }
     }
   }
@@ -301,6 +306,11 @@
         triggerAI(e, 'stun_end', game);
         e.wasAbnormalFall = false;
       }
+    }
+
+    // 親方専用のtickフック（定期立ち止まり・接近停止・ハンマー振り・ハシゴ生座標高さ合わせ）
+    if (e.id === 'foreman' && RK.ForemanAI && RK.ForemanAI.onTick) {
+      RK.ForemanAI.onTick(e, game);
     }
 
     e.invincible = (e.mode === 'abnormal_fall');

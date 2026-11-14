@@ -77,10 +77,10 @@
     FOREMAN_SPOT_MIN_FRAMES: 18,         // プレイヤーグリッド到達時の停止最小時間（0.3秒 @ 60Hz）
     FOREMAN_SPOT_MAX_FRAMES: 48,         // プレイヤーグリッド到達時の停止最大時間（0.8秒 @ 60Hz）
     FOREMAN_SWING_INTERVAL_FRAMES: 60,   // 振り下ろし後から次の振り/トリガー判定までの時間（1.0秒 @ 60Hz）
-    FOREMAN_CHECK_INTERVAL: 4,           // 接近・ハシゴ高さ合わせの荒いチェック周期（tick）
-    FOREMAN_ALIGN_X_RANGE: 6,            // 位置合わせ立ち止まりの横判定範囲（ドット）
-    FOREMAN_ALIGN_Y_RANGE: 12,           // 位置合わせ立ち止まりの縦判定範囲（ドット）
-    FOREMAN_SWING_X_RANGE: 14,           // 振り判断の横判定範囲（ドット。位置合わせより広め）
-    FOREMAN_SWING_Y_RANGE: 16            // 振り判断の縦判定範囲（ドット）
+    FOREMAN_CHECK_INTERVAL: 2,           // 接近・ハシゴ高さ合わせのチェック周期（tick）
+    FOREMAN_ALIGN_X_RANGE: 12,           // 位置合わせ立ち止まりの横判定範囲（ドット）
+    FOREMAN_ALIGN_Y_RANGE: 14,           // 位置合わせ立ち止まりの縦判定範囲（ドット）
+    FOREMAN_SWING_X_RANGE: 20,           // 振り判断の横判定範囲（ドット。位置合わせより広め）
+    FOREMAN_SWING_Y_RANGE: 18            // 振り判断の縦判定範囲（ドット）
   });
 })(window);
