@@ -1,4 +1,4 @@
-/* ===== 地形判定（足場・樽）=====
+/* ===== 地形判定（足場・樽・落下・梯子）=====
  * 「どこに立てるか」「横に進めるか」を答えるだけ。状態は持たない（Player などが使う）。
  * Stage（床レイヤー・物レイヤー）を読むだけで、描画にも入力にも依存しない。
  *
@@ -10,6 +10,9 @@
  *   - 床: セル(c,r)の下端の面 y = (r+1)*CELL_H。
  *   - 樽: セル(c,r)の上面 y = r*CELL_H。
  *   足の幅のうち 1 ドットでも足場に重なっていれば立てる。
+ * 異常落下の停止面（確定。ステップ8a）:
+ *   - 一番下の床（y = HEIGHT）または、一番下の床の上に乗っている樽の上面でのみ停止する。
+ *   - 途中の階層の床や、途中の階層に置かれた樽はすり抜ける。
  * 横にぶつかるもの: 樽だけ（確定）。樽の当たりはセル全体（16 x 24）とする（暫定）。
  *   すでに樽に重なっているときは、外へ向かう動きを止めない（抜けられなくなるのを防ぐ）。
  * 画面下端（y = HEIGHT）は常に足場として扱う（暫定。床の無いステージで無限に落ちないための安全策）。
@@ -52,6 +55,21 @@
     return stage.idAt(c, row) === BARREL;                  // 下のセルの樽の上面
   }
 
+  /**
+   * 列 c が、足の高さ y で異常落下の停止面になるか（確定）。
+   * 一番下の床（y >= HEIGHT）または、一番下の床の上に乗っている樽の上面でのみ停止する。
+   */
+  function supportsAbnormalColumn(stage, c, y) {
+    if (y >= C.HEIGHT) return true;          // 一番下の床
+    if (y % H !== 0) return false;
+    const row = y / H;
+    if (row < 0 || row >= C.ROWS) return false;
+    for (let r = row; r < C.ROWS; r++) {
+      if (stage.idAt(c, r) !== BARREL) return false;
+    }
+    return true;
+  }
+
   /** 足を y に置いた体が、x の位置で足場に乗っているか。体が画面の端をまたいでいてもよい */
   function isSupported(stage, x, y, bw) {
     if (y >= C.HEIGHT) return true;          // 画面下端（暫定）
@@ -60,6 +78,18 @@
     const last = Math.floor((x + bw / 2 - 1) / C.CELL_W);
     for (let k = first; k <= last; k++) {
       if (supportsColumn(stage, wrapCol(k), y)) return true;
+    }
+    return false;
+  }
+
+  /** 足を y に置いた体が、x の位置で異常落下の停止面（一番下の床またはその上の樽）に乗っているか */
+  function isAbnormalSupported(stage, x, y, bw) {
+    if (y >= C.HEIGHT) return true;
+    if (y % H !== 0) return false;
+    const first = Math.floor((x - bw / 2) / C.CELL_W);
+    const last = Math.floor((x + bw / 2 - 1) / C.CELL_W);
+    for (let k = first; k <= last; k++) {
+      if (supportsAbnormalColumn(stage, wrapCol(k), y)) return true;
     }
     return false;
   }
@@ -73,6 +103,19 @@
     const target = y + dist;
     for (let m = (Math.floor(y / H) + 1) * H; m <= target; m += H) {
       if (isSupported(stage, x, m, bw)) return { y: m, landed: true };
+    }
+    return { y: target, landed: false };
+  }
+
+  /**
+   * 異常落下用: 足 y から dist ドット下へ落ち、一番下の床またはその上の樽で止まる。
+   * 戻り値: { y: 落ちた後の足y, landed: 停止面で止まったか }
+   */
+  function abnormalFallTo(stage, x, bw, y, dist) {
+    if (dist <= 0) return { y, landed: false };
+    const target = y + dist;
+    for (let m = (Math.floor(y / H) + 1) * H; m <= target; m += H) {
+      if (isAbnormalSupported(stage, x, m, bw)) return { y: m, landed: true };
     }
     return { y: target, landed: false };
   }
@@ -136,5 +179,8 @@
     return Math.abs(xw - stage.centerX(col)) <= C.LADDER_GRAB_DOTS ? col : -1;
   }
 
-  RK.Physics = Object.freeze({ isSupported, fallTo, blockedX, blockedByFloorX, ladderSpan, ladderColAt, wrapX });
+  RK.Physics = Object.freeze({
+    isSupported, isAbnormalSupported, fallTo, abnormalFallTo,
+    blockedX, blockedByFloorX, ladderSpan, ladderColAt, wrapX,
+  });
 })(window);
