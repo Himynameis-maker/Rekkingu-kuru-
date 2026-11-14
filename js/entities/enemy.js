@@ -43,6 +43,7 @@
       invincible: false,                  // 無敵状態（'abnormal_fall' 中のみ true）
       speedBoost: 0,                      // 落下経験による速度上昇段階（0〜2。親方は未使用）
       moveAccum: 0,                       // サブピクセル移動累積（整数ドット移動を決定的に維持）
+      climbAccum: 0,                      // サブピクセル梯子昇降累積（整数ドット移動を決定的に維持）
       needsReeval: false,                 // 再判定フラグ（梯子付近の停止・循環時などに使用）
       runnerVertical: null,               // Runner用: 縦移動の優先方向（null=未決定 / -1=上 / 1=下）
       horizontalNext: false,              // Runner用: 縦移動直後は横移動を最優先するフラグ
@@ -60,11 +61,20 @@
     return base + e.speedBoost * (C.ENEMY_SPEED_BOOST_STEP || 0);
   }
 
+  /** 現在の梯子昇降速度（ドット/tick。上下共通、キャラ個別） */
+  function currentClimbSpeed(e) {
+    if (e.id === 'runner' && C.RUNNER_CLIMB_SPEED !== undefined) return C.RUNNER_CLIMB_SPEED;
+    if (e.id === 'foreman' && C.FOREMAN_CLIMB_SPEED !== undefined) return C.FOREMAN_CLIMB_SPEED;
+    if (e.id === 'fast_chaser' && C.FAST_CHASER_CLIMB_SPEED !== undefined) return C.FAST_CHASER_CLIMB_SPEED;
+    return C.ENEMY_CLIMB_SPEED;
+  }
+
   /** 通常落下開始 */
   function startFall(e) {
     e.mode = 'fall';
     e.wasAbnormalFall = false;
     e.ladderCol = -1;
+    e.climbAccum = 0;
     e.dirY = 0;
   }
 
@@ -74,6 +84,7 @@
     e.wasAbnormalFall = true;
     e.invincible = true;
     e.ladderCol = -1;
+    e.climbAccum = 0;
     e.dirY = 0;
     e.stunFrames = 0;
   }
@@ -82,6 +93,7 @@
   function boardLadder(e, stage, col, dirY) {
     e.mode = 'ladder';
     e.ladderCol = col;
+    e.climbAccum = 0;
     e.x = stage.centerX(col);
     e.dirX = 0;
     e.dirY = dirY;
@@ -111,6 +123,7 @@
         if (RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
           e.mode = 'ground';
           e.ladderCol = -1;
+          e.climbAccum = 0;
           e.dirY = 0;
           e.dirX = dx;
           if (dx !== 0) e.facing = dx;
@@ -213,7 +226,10 @@
     }
     if (e.stunFrames > 0 || e.pauseFrames > 0) return;
 
-    const steps = C.ENEMY_CLIMB_SPEED;
+    e.climbAccum += currentClimbSpeed(e);
+    const steps = Math.floor(e.climbAccum + 1e-9);
+    e.climbAccum -= steps;
+
     for (let i = 0; i < steps; i++) {
       if (e.mode !== 'ladder' || e.dirY === 0) break;
       const dy = e.dirY > 0 ? 1 : -1;
@@ -225,6 +241,7 @@
         if (e.mode === 'ladder' && RK.Physics.isSupported(stage, e.x, e.y, e.w)) {
           e.mode = 'ground';
           e.ladderCol = -1;
+          e.climbAccum = 0;
           e.dirY = 0;
           e.dirX = e.facing || 1;
         }
