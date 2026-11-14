@@ -3,12 +3,10 @@
  *   体の矩形: 左 = x - w/2, 上 = y - h, 右 = x + w/2, 下 = y
  *   いるセル: col = stage.colAt(x), row = stage.rowAtFeet(y)
  *
- * ステップ8aの範囲: 左右移動（樽には横から通れない。壁は背景側なので通れる。画面の左右端はつながっている）、
- *   床・樽の上に立つ、足場が無くなったら通常落下、梯子の昇降、ハンマー攻撃（画面奥に振り、壁W/w/Vを破壊）、
+ * ステップ8b-4の範囲: 左右移動（樽には横から通れない。壁は背景側なので通れる。画面の左右端はつながっている）、
+ *   床・樽の上に立つ、足場が無くなったら通常落下、梯子の昇降、ハンマー攻撃（画面奥に振り、壁W/w/V・壊せる梯子Lを破壊）、
  *   異常落下（通常の床や途中の段の樽を無視して一番下の床またはその上の樽まで落下。落下中は無敵、着地後即座に無敵解除＆0.5s硬直）。
  * 中心x は常に 0 〜 WIDTH-1。端を越えたら反対側へ移る（moveX）。体が端をまたいでいる間の足場・樽の判定は terrain.js。
- * まだ無いもの: 敵(8b〜)、破壊可能な梯子・鉄柱・爆弾・扉の挙動(9)。
- * 描画はこのファイルに無い（sprites.js）。足場・衝突の判定は physics/terrain.js。ここは状態を更新するだけ。
  *
  * mode（通常落下と異常落下は必ず別状態にする）:
  *  - 'ground': 足場の上。左右に動ける。毎tick、足場に乗っているかを確認し、乗っていなければ 'fall' へ。
@@ -30,12 +28,6 @@
  *              下端に着いて足場に乗ったら 'ground' に戻る。
  *  - 'ground' から: 上入力で足元の梯子に乗る（中心から LADDER_GRAB_DOTS 以内）。下入力で、足場面の真下に梯子があり、その真上に床があれば床をすり抜けて乗る（確定）。
  *    穴のてっぺんの梯子へは、穴を歩いて落ち、落下中に上入力でつかまる（下入力では乗らない）。
- *
- * 移動のしかた（config.js の3つの値で調整）:
- *  - 押した瞬間 = 「チョン」開始。PLAYER_TAP_FRAMES tick かけて PLAYER_TAP_DOTS ドット進む。
- *    チョンの途中で離しても最後まで進む（短いタップでも毎回同じ距離）。
- *  - チョンの時間を過ぎても押し続けていたら、その後は 1tick に PLAYER_SPEED ドットで連続移動。
- *  - チョンの途中で逆方向を押したら、新しい向きのチョンを最初からやり直す。
  */
 (function (w) {
   const RK = (w.RK = w.RK || {});
@@ -71,7 +63,7 @@
   function moveX(p, d, stage, solidFloor) {
     const dir = d > 0 ? 1 : -1;
     for (let i = 0, n = Math.abs(d); i < n; i++) {
-      const nx = p.x + dir;                    // 画面の外になることがある（-1 や WIDTH）。衝突判定は外でも反対側の列で行う
+      const nx = p.x + dir;
       if (stage && RK.Physics.blockedX(stage, nx, p.y, p.w, p.h, dir)) break;
       if (stage && solidFloor && RK.Physics.blockedByFloorX(stage, nx, p.y, p.w, dir)) break;
       p.x = RK.Physics.wrapX(nx);
@@ -110,8 +102,8 @@
     p.stepTick = C.PLAYER_TAP_FRAMES;
   }
 
-  /** ハンマーを画面奥に振る。振った瞬間に1回だけ、自分の中心がある奥の1セルにダメージを与える（同時破壊なし） */
-  function swingHammer(p, stage) {
+  /** ハンマーを画面奥に振る。振った瞬間に1回だけ、自分の中心がある奥の1セルにヒット処理を行う（同時破壊なし） */
+  function swingHammer(p, stage, game) {
     p.hammerFrames = C.HAMMER_FRAMES;
     p.hammerLockFrames = C.HAMMER_LOCK_FRAMES;
     p.hammerCooldown = C.HAMMER_COOLDOWN_FRAMES;
@@ -119,7 +111,11 @@
     p.stepTick = C.PLAYER_TAP_FRAMES;
     const col = stage.wrapCol(stage.colAt(p.x));
     const row = stage.rowAtFeet(p.y);
-    stage.damageCell(col, row, 1);
+    if (game && RK.Game && RK.Game.hitCellByHammer) {
+      RK.Game.hitCellByHammer(game, p, col, row);
+    } else {
+      stage.damageCell(col, row, 1);
+    }
   }
 
   /** 通常落下の1tick。上入力で梯子につかまる。足場に当たったらそこで止まって 'ground' に戻る */
@@ -145,7 +141,7 @@
     }
   }
 
-  /** 左右の入力を処理して横に動かす（チョン + 連続）。足場の上と、梯子の上で使う。solidFloor は梯子のてっぺんのとき true（moveX 参照） */
+  /** 左右の入力を処理して横に動かす（チョン + 連続）。足場の上と、梯子の上で使う。solidFloor は梯子のてっぺんのとき true */
   function stepHorizontal(p, input, stage, solidFloor) {
     if (input.dxPressed) {
       p.stepDir = input.dx;
@@ -155,14 +151,12 @@
 
     let move = 0;
     if (p.stepTick < C.PLAYER_TAP_FRAMES) {
-      // チョン: TAP_DOTS ドットを TAP_FRAMES tick に均等に割り振る（整数のみ・浮動小数なし）
       const t = p.stepTick;
       const dots = Math.floor(((t + 1) * C.PLAYER_TAP_DOTS) / C.PLAYER_TAP_FRAMES)
                  - Math.floor((t * C.PLAYER_TAP_DOTS) / C.PLAYER_TAP_FRAMES);
       move = p.stepDir * dots;
       p.stepTick++;
     } else if (input.dx !== 0) {
-      // 押し続け: 連続移動
       p.facing = input.dx;
       move = input.dx * C.PLAYER_SPEED;
     }
@@ -171,22 +165,16 @@
 
   /**
    * 足場面に立っているとき、その真下のセルにある梯子の列（中心から LADDER_GRAB_DOTS 以内）。無ければ -1。
-   * 床の上から下入力で、床をすり抜けて梯子へ降りるために使う。梯子の真上に床（'='）がある列だけが対象
-   * （穴のてっぺんの梯子には、下入力では乗らない。確定）。
    */
   function ladderBelowCol(p, stage) {
     if (p.y % C.CELL_H !== 0 || p.y >= C.HEIGHT) return -1;
-    const row = p.y / C.CELL_H;                         // 足場面のすぐ下の行
+    const row = p.y / C.CELL_H;
     const col = RK.Physics.ladderColAt(stage, p.x, row);
     if (col < 0 || !stage.hasFloor(col, row - 1)) return -1;
     return col;
   }
 
-  /**
-   * 足場の上での1tick。梯子に乗れるときは、その tick は乗るだけ。なければ左右移動。外れたら落下開始（y の移動は次のtick）。
-   *  - 上入力: 足元（体のいるセル）に梯子があれば乗る。梯子の真上に床があっても、昇ってすり抜けられる（updateLadder）。
-   *  - 下入力: 真下のセルに梯子があれば、床をすり抜けて乗る（梯子の上端 span.top から降りる）。
-   */
+  /** 足場の上での1tick */
   function updateGround(p, input, stage) {
     if (input.dy < 0) {
       const col = RK.Physics.ladderColAt(stage, p.x, stage.rowAtFeet(p.y));
@@ -199,12 +187,7 @@
     if (!RK.Physics.isSupported(stage, p.x, p.y, p.w)) startFall(p);
   }
 
-  /**
-   * 梯子の上での1tick。上下入力で昇り降り（x は中心へ）。昇り降りしていない tick は左右に動ける（どの高さでも）。
-   * 上端か下端で足場に乗ったら 'ground'（梯子の真上に床があるときは床をすり抜けて上端でその床に乗る）。
-   * そうでなく中心から LADDER_GRAB_DOTS を超えて離れたら梯子から外れ、その高さに足場があれば 'ground'、なければ通常落下。
-   * 梯子が無くなっていたら落ちる（将来、梯子の破壊は startAbnormalFall を使う）。
-   */
+  /** 梯子の上での1tick */
   function updateLadder(p, input, stage) {
     const span = RK.Physics.ladderSpan(stage, p.ladderCol, p.y);
     if (!span) { startFall(p); return; }
@@ -222,23 +205,23 @@
     } else {
       p.climbAccum = 0;
     }
-    if (!climbed) stepHorizontal(p, input, stage, p.y === span.top);   // てっぺんでは床のある列へ入れない
+    if (!climbed) stepHorizontal(p, input, stage, p.y === span.top);
 
     if ((p.y === span.top || p.y === span.bottom) && RK.Physics.isSupported(stage, p.x, p.y, p.w)) {
-      p.mode = 'ground';                                          // 梯子の端で足場に乗った
+      p.mode = 'ground';
       p.climbAccum = 0;
     } else if (Math.abs(p.x - cx) > C.LADDER_GRAB_DOTS) {
       if (RK.Physics.isSupported(stage, p.x, p.y, p.w)) {
-        p.mode = 'ground';                                        // 途中の床の高さで横に降りて床に乗った
+        p.mode = 'ground';
         p.climbAccum = 0;
       } else {
-        startFall(p);                                             // 梯子から外れた
+        startFall(p);
       }
     }
   }
 
-  /** 1tick 進める。input は RK.Input の poll() の結果 */
-  function update(p, input, stage) {
+  /** 1tick 進める。input は RK.Input の poll() の結果。game は破壊連動用（省略可） */
+  function update(p, input, stage, game) {
     if (p.hammerFrames > 0) p.hammerFrames--;
     if (p.hammerLockFrames > 0) p.hammerLockFrames--;
     if (p.hammerCooldown > 0) p.hammerCooldown--;
@@ -250,19 +233,16 @@
       return;
     }
 
-    // 足場が（スポーン位置や、将来は破壊で）無くなっていたら、この tick から落ちる
     if (p.mode === 'ground' && !RK.Physics.isSupported(stage, p.x, p.y, p.w)) startFall(p);
 
     if (p.mode === 'fall') {
-      updateFall(p, input, stage);   // 着地した tick は移動しない
+      updateFall(p, input, stage);
     } else if (p.mode === 'ladder') {
       updateLadder(p, input, stage);
     } else {
-      // 異常落下着地後の硬直中は動けない・ハンマーも振れない
       if (p.stunFrames > 0) return;
-      // 歩行可能な状態('ground')でのみハンマーを振れる。振ったあと HAMMER_LOCK_FRAMES は行動を受け付けない
       if (input.hammerPressed && p.hammerCooldown === 0 && p.hammerLockFrames === 0) {
-        swingHammer(p, stage);
+        swingHammer(p, stage, game);
       } else if (p.hammerLockFrames === 0) {
         updateGround(p, input, stage);
       }
