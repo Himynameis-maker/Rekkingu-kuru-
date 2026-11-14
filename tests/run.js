@@ -777,7 +777,7 @@ test('§6, §11 / 不変条件12,13: 樽で反転し、画面端をループし�
   eq(e2.x, 72, 'その場で停止し続ける');
 });
 
-console.log('Foreman AI & 梯子連鎖破壊 & 相互異常落下（ステップ8b-4）');
+console.log('Foreman AI & 梯子連鎖破壊 & 相互異常落下（ステップ8b-4改）');
 test('Foreman: 最速移動（1.1ドット/tick）で追跡し、異常落下しても加速しない', () => {
   const t = setup(mkStage(
     { 4: FULL, 8: FULL },
@@ -795,37 +795,139 @@ test('Foreman: 最速移動（1.1ドット/tick）で追跡し、異常落下し
   t.tick(120);
   eq(foreman.speedBoost, 0, 'Foreman は異常落下しても加速しない');
 });
-test('Foreman: 4〜6sの定期立ち止まり→0.6〜1.2s停止→動き出す瞬間に方向転換トリガーが働く', () => {
-  const t = setup(mkStage({ 8: FULL }, { 8: 'P.............3.' }));
+test('Foreman: 間欠サンプリング（思考タイマー）で記憶した目標座標へ向かい、すれ違い・一拍遅れの追従が起きる', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.3........P.....' }));
   const f = t.game.enemies[0];
-  eq(f.dirX, -1, '最初は左のプレイヤーへ向かう');
-  eq(f.foremanWalkTimer >= C.FOREMAN_WALK_MIN_FRAMES && f.foremanWalkTimer <= C.FOREMAN_WALK_MAX_FRAMES, true, 'walkTimer=' + f.foremanWalkTimer);
+  eq(f.foremanTargetX, 168, '初期 targetX = プレイヤー位置');
+  eq(f.dirX, 1, '右の記憶座標へ向かう');
 
-  let enteredPause = false;
-  for (let i = 0; i < 400; i++) {
-    t.tick(1);
-    if (f.foremanPhase === 'periodic_pause') {
-      enteredPause = true;
-      break;
-    }
-  }
-  eq(enteredPause, true, '4〜6s後に定期立ち止まりに入る');
-  eq(f.pauseFrames >= C.FOREMAN_PAUSE_MIN_FRAMES && f.pauseFrames <= C.FOREMAN_PAUSE_MAX_FRAMES, true, 'pauseFrames=' + f.pauseFrames);
+  // プレイヤーが親方の左側へすれ違って移動しても、思考タイマー発火までは古い targetX(168) を目指して行き過ぎる
+  t.p.x = 24;
+  t.tick(15);
+  eq(f.dirX, 1, '思考タイマー発火前は古い targetX(168) へ向かい続ける');
 
-  const xPaused = f.x;
-  t.p.x = 240;
-  const wait = f.pauseFrames;
-  t.tick(wait);
-  eq(f.x, xPaused, '停止中は動かない');
+  // 思考タイマー（54tick）満了後、新しい targetX(24) を取得して左へ反転する
+  t.tick(C.FOREMAN_THINK_FRAMES);
+  eq(f.foremanTargetX, 24, '思考タイマー発火で新しいプレイヤー座標を取得');
+  eq(f.dirX, -1, '左へ向きを変えて追ってくる');
+});
+test('Foreman: 同じ高さにいるときは、手前の横ハシゴを登らず水平に通過してプレイヤーへ近づく', () => {
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 7: '....L...........', 8: '.3..L.....P.....' }
+  ));
+  const f = t.game.enemies[0];
+  t.tick(120);
+  eq(f.mode, 'ground', '同じ高さの横ハシゴには乗らず ground のまま');
+  eq(f.y, 216, 'y=216 を維持');
+  eq(Math.abs(f.x - t.p.x) <= C.FOREMAN_ARRIVE_TOLERANCE, true, 'プレイヤーの近くで止まる x=' + f.x);
+});
+test('Foreman: ハシゴの中途半端な高さにプレイヤーがいると、上下に数回ブレた後にピタッと止まる', () => {
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 7: '....L...........', 8: '....L...........', 6: '..P.............' }
+  ));
+  // プレイヤーをハシゴの中途半端な高さ (y=195) に配置
+  t.p.x = 72; t.p.y = 195;
+  const f = RK.Enemy.create(t.game.stage, { id: 'foreman', col: 4, row: 8 });
+  t.game.enemies.push(f);
+  t.game.actors.push(f);
+  RK.Enemy.triggerAI(f, 'spawn', t.game);
+
   t.tick(1);
-  eq(f.foremanPhase, 'patrol', '停止終了でpatrol復帰');
-  eq(f.dirX, 1, '動き出す瞬間に方向転換トリガーが働き右向きに変わる');
+  eq(f.mode, 'ladder', 'ハシゴモードに入る');
+  let dirFlips = 0;
+  let prevDir = f.dirY;
+  for (let i = 0; i < 60; i++) {
+    t.tick(1);
+    if (f.dirY !== 0 && prevDir !== 0 && f.dirY !== prevDir) dirFlips++;
+    if (f.dirY !== 0) prevDir = f.dirY;
+  }
+  eq(dirFlips >= 1, true, '目標Y付近で上下にブレる flips=' + dirFlips);
+  eq(f.dirY, 0, '一定時間ブレた後にピタッと停止する');
+  const yStopped = f.y;
+  t.tick(10);
+  eq(f.y, yStopped, '停止後はその高さに留まる');
+});
+test('Foreman: ハシゴを下って地面につきプレイヤーと水平のときは一拍静止し、途中からの横抜けでは静止しない', () => {
+  // 1. ハシゴ下端着地＋水平 → その場で一拍静止
+  const t1 = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 7: '....L...........', 8: '....L.....P.....' }
+  ));
+  const f1 = RK.Enemy.create(t1.game.stage, { id: 'foreman', col: 4, row: 6 });
+  t1.game.enemies.push(f1);
+  t1.game.actors.push(f1);
+  RK.Enemy.triggerAI(f1, 'spawn', t1.game);
+
+  let landed = false;
+  for (let i = 0; i < 80; i++) {
+    t1.tick(1);
+    if (f1.mode === 'ground' && f1.y === 216) { landed = true; break; }
+  }
+  eq(landed, true, 'ハシゴ下端に着地');
+  eq(f1.dirX, 0, 'プレイヤーと水平で下端に着地した直後は静止する');
+  const xLand = f1.x;
+  t1.tick(10);
+  eq(f1.x, xLand, '静止中はその場に留まる');
+  t1.tick(C.FOREMAN_THINK_FRAMES);
+  eq(f1.x > xLand, true, '思考タイマー発火後にこちらへ向かって歩き出す x=' + f1.x);
+
+  // 2. 長いハシゴの途中から中段の床へ抜ける場合 → 静止せず即座に歩く
+  const t2 = setup(mkStage(
+    { 4: FULL, 6: FULL, 8: FULL },
+    { 5: '....L...........', 6: '....L.....P.....', 7: '....L...........', 8: '....L...........' }
+  ));
+  const f2 = RK.Enemy.create(t2.game.stage, { id: 'foreman', col: 4, row: 4 });
+  t2.game.enemies.push(f2);
+  t2.game.actors.push(f2);
+  RK.Enemy.triggerAI(f2, 'spawn', t2.game);
+
+  let exitedMid = false;
+  for (let i = 0; i < 80; i++) {
+    t2.tick(1);
+    if (f2.mode === 'ground' && f2.y === 168) { exitedMid = true; break; }
+  }
+  eq(exitedMid, true, 'ハシゴ途中から中段の床へ抜ける');
+  eq(f2.dirX, 1, '途中からの横抜けでは静止せず即座にプレイヤー方向へ歩く');
+});
+test('Foreman: 樽にぶつかったときは反転せず立ち止まり、通常落下着地時は樽に関係なく左に進む', () => {
+  // 1. 樽の前で反転せず立ち止まる
+  const t1 = setup(mkStage({ 8: FULL }, { 8: '.3..O.....P.....' }));
+  const f1 = t1.game.enemies[0];
+  t1.tick(30);
+  eq(f1.dirX, 0, '樽にぶつかっても反転せず立ち止まる');
+  eq(f1.facing, 1, '向きは樽の方を向いたまま');
+
+  // 2. 通常落下着地時は targetX = 0 にリセットされ、樽に関係なく左へ進む
+  const t2 = setup(mkStage(
+    { 6: '====.===========', 8: FULL },
+    { 6: '....3...........', 8: '.O........P.....' }
+  ));
+  const f2 = t2.game.enemies[0];
+  t2.tick(25);
+  eq(f2.y, 216, '下の床に着地');
+  eq(f2.foremanTargetX, 0, '着地時は targetX = 0 にリセット');
+  eq(f2.dirX, -1, '右のプレイヤーではなく左へ進む');
+});
+test('Foreman: 画面端ループを通過した瞬間に安定して目標再取得トリガーが発動する', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '3.........P.....' }));
+  const f = t.game.enemies[0];
+  // 強制的に左向きへ歩いて画面左端を越えさせる
+  f.foremanTargetX = 0;
+  f.dirX = -1;
+  f.foremanThinkTimer = 50;
+  t.p.x = 200;
+  t.tick(12);
+  eq(f.x > 240, true, '画面左端から右端へループ x=' + f.x);
+  eq(f.foremanTargetX, 200, '画面端通過時に目標座標が即座に更新される');
+  eq(f.dirX, -1, '更新されたプレイヤー(x=200)へ向かう');
 });
 test('Foreman: プレイヤー位置＋壁の場所で0.3〜0.8s立ち止まり→振り下ろし→1.0s後に再振り→離脱で方向転換', () => {
   const t = setup(mkStage({ 8: FULL }, { 8: '.3..V.......P...' }));
   const f = t.game.enemies[0];
   t.p.x = 72; t.p.y = 216;
-  f.x = 68; f.y = 216; f.dirX = 1; f.foremanWalkTimer = 350;
+  f.x = 68; f.y = 216; f.dirX = 1;
 
   let spotted = false;
   for (let i = 0; i < 10; i++) {
@@ -849,18 +951,17 @@ test('Foreman: プレイヤー位置＋壁の場所で0.3〜0.8s立ち止まり�
   eq(f.foremanPhase, 'patrol', '方向転換トリガーが発動して歩き出す');
   eq(f.dirX, 1, 'プレイヤー方向へ追跡開始');
 });
-test('Foreman: プレイヤー付近で定期立ち止まりタイマーが切れても暴発せず、spot_pause後に必ず1回振り下ろす', () => {
+test('Foreman: spot_pause中にプレイヤーがズレても、停止明けにロック対象へ必ず1回振り下ろす', () => {
   const t = setup(mkStage({ 8: FULL }, { 8: '....V.......P...' }));
   t.p.x = 72; t.p.y = 216;
   const f = RK.Enemy.create(t.game.stage, { id: 'foreman', col: 4, row: 8 });
-  f.x = 66; f.y = 216; f.foremanWalkTimer = 1; // 定期タイマーが切れる直前
+  f.x = 66; f.y = 216;
   t.game.enemies.push(f);
   t.game.actors.push(f);
 
   t.tick(1);
-  eq(f.foremanPhase, 'spot_pause', '目の前で定期小休止に入らず spot_pause に入る');
+  eq(f.foremanPhase, 'spot_pause', 'spot_pause に入る');
 
-  // 停止中にプレイヤーが少し横へズレても、1回目はロックした対象を必ず振り下ろす
   t.p.x = 88;
   t.tick(f.pauseFrames + 1);
   eq(t.game.stage.hpAt(4, 8), 2, '停止明けに必ず1回振り下ろして耐久 3 -> 2');
