@@ -8,6 +8,8 @@
   /** stageData = { name, floor[], objects[] } */
   function create(stageData) {
     const stage = RK.Stage.parse(stageData.name, stageData);
+    // Runner の初期左右方向（-1=左 / 1=右）。既定は右。エディタ/本編共通のステージデータから受け取る
+    stage.runnerDir = (stageData.runnerDir === -1 || stageData.runnerDir === 'left') ? -1 : 1;
     const pSpawn = stage.spawns.find((s) => s.id === 'player');
     const player = pSpawn ? RK.Player.create(stage, pSpawn) : null;
 
