@@ -17,11 +17,12 @@
   - ハンマー攻撃と壁3種・壊せる梯子 `L` の破壊（歩行可能な `ground` 状態でのみ画面奥1セルを叩き、`W`=1/`w`=2/`V`=3回で破壊、`L` は1振りで叩いた位置から0.2s間隔で上下に連鎖消滅。爆弾 `B`・扉 `D`・鉄柱 `I`・壊せない梯子 `H` は壊せない。壁破壊しきり時に相手が同セルに立っていると相互異常落下）。
   - 異常落下（`mode: 'abnormal_fall'`。途中の床や途中の段の樽を無視し、一番下の床またはその上の樽まで落下。落下中は無敵、着地で即座に無敵解除＆プレイヤーと親方は0.5秒・通常敵は1.0秒の着地硬直）。
   - 敵の共通土台（`js/entities/enemy.js`）: 敵4種（`chaser` / `runner` / `foreman` / `fast_chaser`）のスポーン、節目イベント、サブピクセル累積による整数ドット移動（地上・梯子とも）、梯子昇降（キャラ個別速度対応）、通常落下（スタンなし・加速なし・即行動再開）、異常落下（通常敵のみ速度段階上昇・最大2段階、親方は加速なし・プレイヤーと同じ0.5sスタン）。
-  - Chaser & Fast Chaser AI（`js/ai/chaser.js`）、Runner AI（`js/ai/runner.js`）、**Foreman AI（`js/ai/foreman.js`）** 実装完了。
+  - Chaser & Fast Chaser AI（`js/ai/chaser.js`）、Runner AI（`js/ai/runner.js`）、**Foreman AI（`js/ai/foreman.js`）** 実装・調整完了（プレイヤー付近での定期停止抑制、ロック対象への確実な1振り目、判定範囲・周期の適正化済み）。
   - **壊せる梯子（`L`）の連鎖崩壊＆捕まりキャラ挙動（`js/core/game.js`）** 実装完了（0.2s間隔上下連鎖、崩壊開始時の敵降りかけ引き返し、消滅マスでの床着地トリガー再現および空中消滅時の異常落下）。
+  - **親方挙動確認用テストステージ（`js/data/stages/stage01.js`）** 作成完了。
 - **未実装**: 鉄柱 `I`・爆弾 `B`（導火線・爆発連鎖）・扉 `D`（開閉・敵の隠れ）の挙動、落下する樽、火の玉、ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）、ステージエディタ、ドット絵・サウンド。
 - **次の作業**: **ステップ9**（樽の落下・鉄柱 `I`・爆弾 `B`・扉 `D` の挙動実装）。
-- **テスト**: `node tests/run.js`（147件全通過）と `node tests/smoke.js`（全通過）。
+- **テスト**: `node tests/run.js`（148件全通過）と `node tests/smoke.js`（全通過）。
 
 ## 1. 作業ルール（AI への指示）
 1. **仕様にない独自ルールを勝手に追加しない。** 決める必要が出たら「未決事項」に書き、選択肢を出して聞く。暫定値を入れた場合は §9 と「進捗」に「暫定」と明記する。
@@ -47,7 +48,7 @@
 ### 敵（4種）
 - **Chaser（追尾）**【実装済】: プレイヤーと**同じ高さ** → プレイヤー方向へ進み、間に同じ高さの樽があれば反転。**違う高さ** → 水平到達可能な接続済み梯子から距離最短（非ループ距離、同距離なら左優先）を選択。行き止まり梯子も登り、てっぺんの行き止まりに着いたら1段降りて通常アルゴリズムに戻る。有効な梯子が無いときは「左側に同じ高さの樽があれば右、なければ左」。障害物で反転し、梯子付近の循環時は停止＋再判定フラグ。通常落下着地時＆異常落下スタン終了時に再判定。
 - **Runner（直進）**【実装済】: プレイヤーを追跡しない。初期方向（`runnerDir`、既定は右）へ直進し、樽等で進めなければ反転。梯子では初回は下優先（`null` → `1` → `-1`）、決定後は記録された `runnerVertical` を優先（不可なら反転・記録更新）。行き止まり梯子も登り、てっぺんの行き止まりに着いたら1段下がり下向き傾向（`runnerVertical = 1`）で通常アルゴリズムに従う。**縦移動直後は `horizontalNext = true` により横移動を最優先**し、横へ出られない高さなら再び縦移動する。
-- **Foreman（親方）**【実装済】: ゲーム中最速（`1.1` ドット/tick）で Chaser と同じ追跡アルゴリズムで移動（加速なし）。移動開始から `4.0〜6.0s` 経つと `0.6〜1.2s` 立ち止まり、動き出す瞬間に方向転換トリガーが働く。プレイヤーのグリッドに辿り着き（荒い4tick周期＋生座標追尾により、追い抜きやハシゴ上での数ドット上下揺れが自然に発生）、プレイヤーが壊せる梯子 `L` か壁 `W`/`w`/`V` の場所に立っており親方もそこにいるとき `0.3〜0.8s` 立ち止まる。その直後も振り判定範囲内にいればハンマーを1回振り下ろし、さらに `1.0s` 後に再判定（範囲外なら方向転換トリガー発動）。扉・爆弾・鉄柱・不可梯子の前では振らず壊せない。壁を完全に破壊した瞬間に相手（プレイヤー⇔親方）がその壁の前に立っていたら相互に異常落下させる。異常落下後のスタンはプレイヤーと同じ（0.5s）。**ステージの裏側（壁などの奥）に描画されるキャラ**。
+- **Foreman（親方）**【実装済】: ゲーム中最速（`1.1` ドット/tick）で Chaser と同じ追跡アルゴリズムで移動（加速なし）。移動開始から `4.0〜6.0s` 経つと `0.6〜1.2s` 立ち止まり、動き出す瞬間に方向転換トリガーが働く（プレイヤー至近距離では巡回小休止を抑制）。プレイヤーが壊せる梯子 `L` か壁 `W`/`w`/`V` の場所に立っており親方もそこにいるとき、対象セルをロックして `0.3〜0.8s` 立ち止まり、停止明けに最低1回は必ずハンマーを振り下ろす。さらに `1.0s` 後にプレイヤーがまだ振り判定範囲内かつ対象が残っていれば続けて振り下ろし、範囲外・対象なしになれば方向転換トリガーを発動して歩き出す。扉・爆弾・鉄柱・不可梯子の前では振らず壊せない。壁を完全に破壊した瞬間に相手（プレイヤー⇔親方）がその壁の前に立っていたら相互に異常落下させる。異常落下後のスタンはプレイヤーと同じ（0.5s）。**ステージの裏側（壁などの奥）に描画されるキャラ**。
 - **Fast Chaser（高速追尾）**【実装済】: 判断ロジックは Chaser と完全共通、**速度パラメータのみ別**。
 - **落下後ペナルティ**: 通常の敵は**異常落下着地後**に一定時間スタンし、速度段階が上がる（上限あり、最大2段階）。**通常落下ではスタンも加速（速度段階上昇）もしない**。プレイヤーと親方は加速しない（親方の異常落下スタンはプレイヤーと同じ0.5s）。
 
@@ -114,11 +115,11 @@
 - `js/ai/foreman.js`: Foreman（親方）の行動アルゴリズム（`RK.ForemanAI`）
 - `js/stage/symbols.js`: ステージ記号定義・壁初期HP
 - `js/stage/stage.js`: `{ floor, objects }` 解析・検証・耐久値管理・`toData()`
-- `js/data/stages/stage01.js`: ステージ1定義（2レイヤー）
+- `js/data/stages/stage01.js`: ステージ1定義（2レイヤー。現在は親方挙動確認用レイアウト）
 - `js/render/screen.js`: Canvas初期化・整数倍拡大
 - `js/render/sprites.js`: 仮スプライト描画（壁ひび割れ・異常落下点滅・スタン表示・両側描画）
 - `js/render/renderer.js`: Stage とアクターの描画（親方の裏側描画対応）
-- `tests/run.js` / `tests/smoke.js`: Node標準機能のみで動くロジックテスト（147件）＆偽DOM起動テスト
+- `tests/run.js` / `tests/smoke.js`: Node標準機能のみで動くロジックテスト（148件）＆偽DOM起動テスト
 
 ### 今後追加する予定のフォルダ・ファイル
 - `js/objects/`（落下樽・鉄柱・爆弾・扉・火の玉）、`js/editor/`（ステージエディタ）、`js/audio/`（サウンド）
@@ -142,14 +143,14 @@
 - **Player**（`RK.Player.create(stage, spawn)` の戻り値）:
   - `id: 'player'`, `x`, `y`, `w`（12）, `h`（24）, `facing`（`-1|1`）, `mode`（`'ground' | 'fall' | 'abnormal_fall' | 'ladder'`）, `ladderCol`, `climbAccum`, `stepDir`, `stepTick`, `hammerFrames`, `hammerLockFrames`, `hammerCooldown`, `stunFrames`, `invincible`
 - **Enemy**（`RK.Enemy.create(stage, spawn)` の戻り値）:
-  - `id`（`'chaser' | 'runner' | 'foreman' | 'fast_chaser'`）, `x`, `y`, `w`（12）, `h`（24）, `facing`（`-1|1`）, `dirX`（`-1|0|1`）, `dirY`（`-1|0|1`）, `mode`（`'ground' | 'fall' | 'abnormal_fall' | 'ladder'`）, `ladderCol`, `stunFrames`, `wasAbnormalFall`, `invincible`, `speedBoost`（`0..2`）, `moveAccum`, `climbAccum`, `needsReeval`, `runnerVertical`（`null | -1 | 1`）, `horizontalNext`（`boolean`）, `hammerFrames`, `pauseFrames`, `foremanPhase`, `foremanWalkTimer`, `foremanCheckTick`
+  - `id`（`'chaser' | 'runner' | 'foreman' | 'fast_chaser'`）, `x`, `y`, `w`（12）, `h`（24）, `facing`（`-1|1`）, `dirX`（`-1|0|1`）, `dirY`（`-1|0|1`）, `mode`（`'ground' | 'fall' | 'abnormal_fall' | 'ladder'`）, `ladderCol`, `stunFrames`, `wasAbnormalFall`, `invincible`, `speedBoost`（`0..2`）, `moveAccum`, `climbAccum`, `needsReeval`, `runnerVertical`（`null | -1 | 1`）, `horizontalNext`（`boolean`）, `hammerFrames`, `pauseFrames`, `foremanPhase`, `foremanWalkTimer`, `foremanCheckTick`, `foremanLockedTarget`
 - **Game**（`RK.Game.create(stageData)` の戻り値）:
   - `{ stage, player, enemies: [...], actors: [...], tick, rngState, ladderCollapses: [...] }`
 
 ### 6.3 各モジュールの公開API
 | 名前 | 主なメソッド・プロパティ |
 |---|---|
-| `RK.CONFIG` | `CELL_W`(16) `CELL_H`(24) `COLS`(16) `ROWS`(9) `WIDTH`(256) `HEIGHT`(216) `BG_COLOR` `FLOOR_DRAW_H`(4) `TICK_HZ`(60) `PLAYER_*` `ENEMY_*` `RUNNER_SPEED`(0.9) `FAST_CHASER_SPEED`(1) `FOREMAN_SPEED`(1.1) `FOREMAN_CLIMB_SPEED`(1.1) `FOREMAN_WALK_*` `FOREMAN_PAUSE_*` `FOREMAN_SPOT_*` `FOREMAN_SWING_*` `FOREMAN_ALIGN_*` `LADDER_COLLAPSE_INTERVAL_FRAMES`(12) `LADDER_RETREAT_DOTS`(12) `WALL_*_HP` `HAMMER_*` `LADDER_GRAB_DOTS` |
+| `RK.CONFIG` | `CELL_W`(16) `CELL_H`(24) `COLS`(16) `ROWS`(9) `WIDTH`(256) `HEIGHT`(216) `BG_COLOR` `FLOOR_DRAW_H`(4) `TICK_HZ`(60) `PLAYER_*` `ENEMY_*` `RUNNER_SPEED`(0.9) `FAST_CHASER_SPEED`(1) `FOREMAN_SPEED`(1.1) `FOREMAN_CLIMB_SPEED`(1.1) `FOREMAN_WALK_*` `FOREMAN_PAUSE_*` `FOREMAN_SPOT_*` `FOREMAN_SWING_*` `FOREMAN_ALIGN_*` `FOREMAN_CHECK_INTERVAL`(2) `LADDER_COLLAPSE_INTERVAL_FRAMES`(12) `LADDER_RETREAT_DOTS`(12) `WALL_*_HP` `HAMMER_*` `LADDER_GRAB_DOTS` |
 | `RK.Symbols` | `LAYER`（`NONE / FLOOR / OBJECT / ACTOR`）, `defs`, `byChar`, `byId` |
 | `RK.Stage` | `Stage`, `parse(name, data)`。メソッド: `inBounds(c,r)` `wrapCol(c)` `idAt(c,r)` `hpAt(c,r)` `maxHpAt(c,r)` `hasFloor(c,r)` `surfaceY(r)` `colAt(x)` `rowAtFeet(y)` `centerX(c)` `setId(c,r,id)` `setFloor(c,r,v)` `damageCell(c,r,amount)` `toData()` |
 | `RK.Input` | `create()` → `{ set(source, name, down), releaseAll(source), poll() }`, `attachKeyboard(input, window)`, `KEYMAP`, `NAMES` |
@@ -209,7 +210,8 @@
 | `FOREMAN_PAUSE_MIN/MAX_FRAMES` | 36 / 72 | 確定。親方の定期立ち止まり時間（0.6〜1.2秒） |
 | `FOREMAN_SPOT_MIN/MAX_FRAMES` | 18 / 48 | 確定。親方のプレイヤー到達時停止時間（0.3〜0.8秒） |
 | `FOREMAN_SWING_INTERVAL_FRAMES` | 60 | 確定。親方の振り下ろし後の待機時間（1.0秒） |
-| `FOREMAN_ALIGN_X/Y` & `SWING_X/Y` | 6,12 / 14,16 | 暫定（調整可）。位置合わせ停止範囲と振り判断範囲（ドット） |
+| `FOREMAN_CHECK_INTERVAL` | 2 | 調整済。接近・ハシゴ高さ合わせのチェック周期（tick） |
+| `FOREMAN_ALIGN_X/Y` & `SWING_X/Y` | 12,14 / 20,18 | 調整済。位置合わせ停止範囲と振り判断範囲（ドット） |
 
 ---
 
@@ -222,7 +224,7 @@
 - [x] **8b-1**: 敵の共通土台（`js/entities/enemy.js`。スポーン・節目イベント発火・移動・梯子昇降・通常/異常落下・スタン、`run.js` 113件通過）
 - [x] **8b-2**: Chaser & Fast Chaser の行動アルゴリズム実装（`js/ai/chaser.js`、`run.js` 128件通過）
 - [x] **8b-3**: Runner の行動アルゴリズム実装（`js/ai/runner.js`、`run.js` 138件通過）、通常落下加速廃止＆下入力梯子降り実装（`run.js` 140件通過）
-- [x] **8b-4**: Foreman（親方）の個別AI・裏側描画（`js/ai/foreman.js`、`js/render/renderer.js`）、壁破壊時の相互異常落下、および壊せる梯子 `L` の0.2s連鎖破壊・敵降りかけ引き返し・床着地判定の実装（`run.js` 147件通過）
+- [x] **8b-4**: Foreman（親方）の個別AI・裏側描画（`js/ai/foreman.js`、`js/render/renderer.js`）、壁破壊時の相互異常落下、および壊せる梯子 `L` の0.2s連鎖破壊・敵降りかけ引き返し・床着地判定の実装・調整（`run.js` 148件通過）。親方挙動確認用 `stage01.js` 作成
 - [ ] **9**: 樽（落下）・鉄柱 `I`・爆弾 `B`・扉 `D`
 - [ ] **10**: 火の玉・ライフ・ゲーム進行（READY/PLAY/MISS/CLEAR）
 - [ ] **11**: ステージエディタ（スマホ対応）
@@ -235,7 +237,7 @@
 2. **鉄柱 `I`・爆弾 `B`・扉 `D`・落下樽の仕様詳細**（ステップ9で実装）: 鉄柱破壊で支えていた壁・樽が落ちる遅延時間、爆弾の導火線時間・爆発範囲・横連鎖条件、扉の開放時間・敵が隠れる条件と再出現ルール。
 3. **物レイヤーの重ね・床の描画順**: 壁と鉄柱の重ねが必要になった場合のレイヤー拡張、およびドット絵化時の描画順見直し。
 4. **画面端ループ・はみ出し描画の見え方**: 中心 `x` 基準での反転タイミングやキャンバス外はみ出しの見え方を実機確認して調整。
-5. **暫定パラメータの最終調整**: §7 の移動・落下・梯子速度、敵速度・スタン時間、親方の位置合わせ／振り判定範囲（`FOREMAN_ALIGN_*` / `FOREMAN_SWING_*`）、梯子降りかけ引き返し深さ（`LADDER_RETREAT_DOTS`）、スティック形式を実機プレイで調整。
+5. **暫定パラメータの最終調整**: §7 の移動・落下・梯子速度、敵速度・スタン時間、梯子降りかけ引き返し深さ（`LADDER_RETREAT_DOTS`）、スティック形式を実機プレイで調整。
 
 ---
 
@@ -245,4 +247,4 @@
 - **完了時確認**: プロジェクトフォルダに上書き後、`node tests/run.js` と `node tests/smoke.js` を実行して全件パスすることを確認する。
 - **変更ログ**:
   - ステップ0〜8b-3完了（`tests/run.js` 140件・`tests/smoke.js` 17件全通過）。
-  - ステップ8b-4完了: `js/ai/foreman.js` 新規作成（親方の最速追跡・4〜6s定期停止・0.3〜0.8s接近停止・1.0s再振り・荒い4tick周期＋ハシゴ生座標追尾）、`js/core/game.js`（`hitCellByHammer` 共通化・壁破壊時の相互異常落下・壊せる梯子 `L` の0.2s連鎖破壊・敵降りかけ引き返し・床着地トリガー）、`js/entities/player.js`（ハンマーヒットの `RK.Game.hitCellByHammer` 連携）、`js/entities/enemy.js`（親方速度 `1.1`・異常落下スタン30tick・ハシゴ停止対応・`ForemanAI.onTick` フック）、`js/config.js`（親方・梯子連鎖崩壊定数追加）、`js/render/renderer.js`（親方の物レイヤー裏側描画）、`index.html`・`tests/run.js` 更新（147件全通過）。
+  - ステップ8b-4完了・調整: `js/ai/foreman.js`（プレイヤー至近距離での定期立ち止まり抑制、ロック対象への確実な1振り目追加）、`js/config.js`（親方判定範囲・チェック周期調整）、`js/core/game.js`・`js/entities/player.js`・`js/entities/enemy.js`・`js/render/renderer.js`・`index.html`・`tests/run.js` 更新（148件全通過）。親方挙動確認用 `js/data/stages/stage01.js` 作成。
