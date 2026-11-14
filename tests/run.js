@@ -1,5 +1,5 @@
 /* ヘッドレステスト: node tests/run.js
- * DOM を使わない部分（config / stage / input / loop / physics / player / enemy / game）を Node の vm に読み込んで確認する。
+ * DOM を使わない部分（config / stage / input / loop / physics / player / enemy / ai / game）を Node の vm に読み込んで確認する。
  * 新しいステップを作るたびに、そのルールのテストをここに足していく。 */
 const vm = require('vm');
 const fs = require('fs');
@@ -12,7 +12,7 @@ vm.createContext(sandbox);
 [
   'js/config.js', 'js/stage/symbols.js', 'js/stage/stage.js', 'js/data/stages/stage01.js',
   'js/core/input.js', 'js/core/loop.js', 'js/physics/terrain.js',
-  'js/entities/player.js', 'js/entities/enemy.js', 'js/core/game.js',
+  'js/entities/player.js', 'js/entities/enemy.js', 'js/ai/chaser.js', 'js/core/game.js',
 ].forEach((f) => vm.runInContext(fs.readFileSync(path.join(root, f), 'utf8'), sandbox, { filename: f }));
 const RK = sandbox.RK;
 const C = RK.CONFIG;
@@ -413,38 +413,35 @@ test('敵は樽にぶつかると反転し、画面端では左右ループす�
   const t = setup(mkStage({ 8: FULL }, { 8: 'P..1..O.........' }));
   const e = t.game.enemies[0];
   eq(e.x, 56, 'x0');
-  t.tick(30); // 右へ進み col6 の樽(x=96..111)の手前 x=90 でぶつかって左へ反転
+  t.tick(45); // 右へ進み col6 の樽の手前でぶつかって左へ反転
   eq(e.facing, -1, '樽で左へ反転');
   eq(e.x < 90, true, '反転して左へ進む x=' + e.x);
-  // 左へ進み続けると左端を越えて右端へループする
-  t.tick(100);
+  t.tick(120);
   eq(e.x > 200, true, '左端から右端へループ x=' + e.x);
 });
 test('AI判断は毎フレームではなく、セル中心(cell_center)の節目でのみ呼ばれる', () => {
   const events = [];
-  RK.Enemy.registerAI('chaser', (e, ev) => {
+  RK.Enemy.registerAI('runner', (e, ev) => {
     events.push({ ev, x: e.x });
     return { dirX: 1, dirY: 0 };
   });
   try {
-    const t = setup(mkStage({ 8: FULL }, { 8: 'P.1.............' }));
-    // spawn で1回呼ばれたあと、16tick(1セル=16ドット)進めると col3 の中心(x=56)で1回だけ呼ばれる
+    const t = setup(mkStage({ 8: FULL }, { 8: 'P.2.............' }));
     eq(events.length, 1, 'spawn時');
     eq(events[0].ev, 'spawn', 'event=spawn');
-    t.tick(15);
+    // ENEMY_SPEED = 0.8 の場合、16ドット進むには 20tick かかる
+    t.tick(19);
     eq(events.length, 1, '途中では呼ばれない');
     t.tick(1);
     eq(events.length, 2, 'セル中心到達で1回呼ばれる');
     eq(events[1].ev, 'cell_center', 'event=cell_center');
     eq(events[1].x, 56, 'x=56');
   } finally {
-    RK.Enemy.registerAI('chaser', null);
+    RK.Enemy.registerAI('runner', null);
   }
 });
 test('AIが梯子方向(dirY=-1)を返すと梯子モードに入り、床の高さ(ladder_floor)の節目で判断が呼ばれる', () => {
-  const ladderEvents = [];
   RK.Enemy.registerAI('runner', (e, ev) => {
-    ladderEvents.push({ ev, y: e.y, mode: e.mode });
     if (ev === 'spawn') return { dirX: 1, dirY: 0 };
     if (ev === 'cell_center' && e.x === 72) return { dirX: 0, dirY: -1 };
     if (ev === 'ladder_floor' && e.y === 168) return { dirX: 1, dirY: 0 };
@@ -456,8 +453,8 @@ test('AIが梯子方向(dirY=-1)を返すと梯子モードに入り、床の高
       { 7: '....L...........', 8: 'P.2.L...........' }
     ));
     const e = t.game.enemies[0];
-    // col2(x=40) から col4(x=72) まで32tick歩き、その後48tick昇って y=168 の床へ降りる
-    t.tick(32 + 48 + 5);
+    // col2(x=40) から col4(x=72) まで32ドット(40tick)歩き、その後48tick昇って y=168 の床へ降りる
+    t.tick(40 + 48 + 10);
     eq(e.mode, 'ground', '上の床へ降りた');
     eq(e.y, 168, 'y=168');
     eq(e.x > 72, true, '上の床を右へ歩いている x=' + e.x);
@@ -472,8 +469,7 @@ test('通常落下着地時、通常敵はスタン＆速度段階上昇する�
   ));
   const chaser = t.game.enemies[0];
   const foreman = t.game.enemies[1];
-  // 穴(col3)へ歩いて落ちるまで進める
-  t.tick(60);
+  t.tick(80);
   eq(chaser.y, 216, 'chaser着地');
   eq(foreman.y, 216, 'foreman着地');
   eq(chaser.stunFrames > 0, true, 'chaserは着地後にスタンする');
@@ -495,6 +491,177 @@ test('敵の異常落下: 途中の床をすり抜け一番下の床まで落下
   eq(e.mode, 'ground', 'ground復帰');
   eq(e.invincible, false, '着地と同時に無敵解除');
   eq(e.stunFrames > 0, true, '通常敵は着地後スタン');
+});
+
+console.log('Chaser & Fast Chaser AI（ステップ8b-2）');
+test('§3-1/3-2: 同じ高さにいる場合、プレイヤーの方向（右/左）へ追跡する', () => {
+  const a = setup(mkStage({ 8: FULL }, { 8: '.1........P.....' }));
+  eq(a.game.enemies[0].dirX, 1, 'プレイヤーが右なら右へ進む');
+  const b = setup(mkStage({ 8: FULL }, { 8: '.P........1.....' }));
+  eq(b.game.enemies[0].dirX, -1, 'プレイヤーが左なら左へ進む');
+});
+test('§3-4 / 不変条件7: 同じ高さの樽がプレイヤーとの間にある場合は追跡方向を反転する', () => {
+  const a = setup(mkStage({ 8: FULL }, { 8: '.1...O....P.....' }));
+  eq(a.game.enemies[0].dirX, -1, '右にプレイヤー、間に樽 → 左へ反転');
+
+  const b = setup(mkStage({ 8: FULL }, { 8: '.P...O....1.....' }));
+  eq(b.game.enemies[0].dirX, 1, '左にプレイヤー、間に樽 → 右へ反転');
+
+  // 同じ高さに樽があっても、プレイヤーとの間でなければ反転しない
+  const c = setup(mkStage({ 8: FULL }, { 8: 'O.1.......P.....' }));
+  eq(c.game.enemies[0].dirX, 1, '外側にある樽では反転しない');
+});
+test('§2 / 不変条件2,3: 平地歩行中はプレイヤーが移動・高さ変化しても追跡方針を再判定しない', () => {
+  const t = setup(mkStage({ 8: FULL }, { 8: '.......1..P.....' }));
+  const e = t.game.enemies[0];
+  eq(e.dirX, 1, '開始時は右');
+  // プレイヤーがチェイサーの左側へワープし、高さも変えても、梯子がない平地では右へ進み続ける
+  t.p.x = 16;
+  t.p.y = 168;
+  t.tick(25);
+  eq(e.dirX, 1, '平地では方向を維持し続ける');
+  eq(e.x > 120, true, '右へ進んでいる x=' + e.x);
+});
+test('§4-1 / §2-3: 異なる高さで梯子のマスに到達すると登って上のプレイヤーを追う', () => {
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '..........P.....', 7: '.....L..........', 8: '..1..L..........' }
+  ));
+  const e = t.game.enemies[0];
+  eq(e.dirX, 1, '右の梯子へ向かう');
+  // col2(x=40) から col5(x=88) まで48ドット(60tick)歩き、梯子を48tick昇る
+  t.tick(60 + 55);
+  eq(e.y, 168, '上の床へ到達');
+  eq(e.mode, 'ground', '上の床へ降りた');
+  eq(e.dirX, 1, '上の床で右のプレイヤーへ向かう');
+});
+test('§4-2 / §2-3: プレイヤーが下にいる場合、梯子の直上のマスから降りて追う（1段下接続も有効）', () => {
+  const t = setup(mkStage(
+    { 4: FULL, 6: '===.============', 8: FULL },
+    { 4: '..........P.....', 7: '.....L..........', 8: '.....L..........' }
+  ));
+  // P を一番下の段 (y=216) に置き、チェイサーを中段 (col2, y=168) に置く
+  t.p.x = 168; t.p.y = 216;
+  const e = RK.Enemy.create(t.game.stage, { id: 'chaser', col: 2, row: 6 });
+  t.game.enemies.push(e);
+  t.game.actors.push(e);
+  RK.Enemy.triggerAI(e, 'spawn', t.game);
+
+  eq(e.dirX, 1, '右の梯子直上(col5)へ向かう');
+  t.tick(60 + 55);
+  eq(e.y, 216, '下の床へ降りた');
+  eq(e.mode, 'ground', 'ground');
+  eq(e.dirX, 1, 'プレイヤー方向(右)へ進む');
+});
+test('§4-2: 上に隣接しているだけで接続されていない梯子は登れる梯子として扱わない', () => {
+  // row8 に床、row7 に L があるが row8 に L がなく足元から接続されていない
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '.....P..........', 7: '.....L..........', 8: '..1.............' }
+  ));
+  const e = t.game.enemies[0];
+  eq(RK.ChaserAI.canClimbUpAt(t.game.stage, 5, 216, e.w), false, '未接続の梯子は登れない');
+  // 有効な梯子がないため §5 のルール（左に樽なし → 左へ進む）になる
+  eq(e.dirX, -1, '有効梯子なしなので左へ進む');
+});
+test('§4-3 / 不変条件4,5,6: 最短距離の梯子を選び、同距離なら左側優先、画面端ループ距離は使わない', () => {
+  // 1) 同距離なら左側優先: チェイサー col5(x=88), 左梯子 col2(x=40, 距離48), 右梯子 col8(x=136, 距離48)
+  const sameDist = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '.......P........', 7: '..L.....L.......', 8: '..L..1..L.......' }
+  ));
+  eq(sameDist.game.enemies[0].dirX, -1, '同距離なら左側の梯子(col2)を優先');
+
+  // 2) 画面端ループを考慮しない距離比較: チェイサー col1(x=24), 左端梯子 col0(x=8, 距離16), 右端梯子 col15(x=248, 距離224)
+  // もしループ距離なら col15 も距離32だが、非ループ距離で col0(距離16) を選ぶ
+  const noWrapDist = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '.......P........', 7: 'L..............L', 8: 'L1.............L' }
+  ));
+  eq(noWrapDist.game.enemies[0].dirX, -1, '画面端ループ距離は使わず col0 へ進む');
+});
+test('§5 / 不変条件8: 有効な梯子がない場合、左側に同じ高さの樽があれば右へ、なければ左へ進む', () => {
+  // 左側に樽あり → プレイヤーが左にいても右へ進む
+  const withLeftBarrel = setup(mkStage(
+    { 8: FULL },
+    { 6: '.P..............', 8: '.O....1.........' }
+  ));
+  eq(withLeftBarrel.game.enemies[0].dirX, 1, '左に樽があれば右へ');
+
+  // 左側に樽なし（右側に樽あり）→ プレイヤーが右にいても左へ進む
+  const withoutLeftBarrel = setup(mkStage(
+    { 8: FULL },
+    { 6: '..........P.....', 8: '......1....O....' }
+  ));
+  eq(withoutLeftBarrel.game.enemies[0].dirX, -1, '左に樽がなければ左へ');
+});
+test('§6 / 不変条件9: 移動できない場合は反転し、反対方向にも移動できなければ停止する', () => {
+  // 左右を樽に挟まれて動けないケース
+  const trapped = setup(mkStage(
+    { 8: FULL },
+    { 8: '..O1O......P....' }
+  ));
+  const e = trapped.game.enemies[0];
+  eq(e.dirX, 0, '両側を塞がれたら停止');
+  t.tick(10);
+  eq(e.x, 56, 'その場から動かない');
+});
+test('§7 / 不変条件10: 梯子付近で方向選択が循環する場合は停止し、再判定フラグを設定する', () => {
+  const t = setup(mkStage(
+    { 6: FULL, 8: FULL },
+    { 6: '..........P.....', 7: '...O.O..........', 8: '...OLO....P.....' }
+  ));
+  // 梯子 col4(x=72) の左右を樽で塞いだ状態で配置
+  const stage = t.game.stage;
+  stage.setId(3, 8, 'barrel');
+  stage.setId(5, 8, 'barrel');
+  const e = RK.Enemy.create(stage, { id: 'chaser', col: 4, row: 8 });
+  RK.Enemy.triggerAI(e, 'spawn', t.game);
+  eq(e.dirX, 0, '梯子付近で両側塞がれたら停止');
+  eq(e.needsReeval, true, '再判定フラグが設定される');
+});
+test('§8: 通常落下後に着地すると追跡方針を再判定し、プレイヤーと同じ高さならプレイヤー方向へ向く', () => {
+  const t = setup(mkStage(
+    { 6: '===.============', 8: FULL },
+    { 6: '.1..............', 8: '..........P.....' }
+  ));
+  const e = t.game.enemies[0];
+  // 穴(col3)へ落ちて着地後、スタンが解けると右のプレイヤーへ向かう
+  t.tick(140);
+  eq(e.y, 216, '着地');
+  eq(e.dirX, 1, '着地後にプレイヤー方向(右)へ向き変更');
+});
+test('§9: 異常落下後はスタン状態になり、スタン終了時に追跡方針を再判定する', () => {
+  const t = setup(mkStage(
+    { 4: FULL, 8: FULL },
+    { 4: '..1.............', 8: '..........P.....' }
+  ));
+  const e = t.game.enemies[0];
+  e.dirX = -1;
+  e.facing = -1;
+  RK.Enemy.startAbnormalFall(e);
+  t.tick(72);
+  eq(e.y, 216, '異常落下着地');
+  eq(e.stunFrames, C.ENEMY_ABNORMAL_LAND_STUN_FRAMES, 'スタン開始');
+  // スタン終了（30〜60tick後）まで進め、スタン終了時にプレイヤー方向（右）へ再判定される
+  t.tick(C.ENEMY_ABNORMAL_LAND_STUN_FRAMES);
+  eq(e.stunFrames, 0, 'スタン終了');
+  eq(e.dirX, 1, 'スタン終了時に追跡方針を再判定して右へ');
+});
+test('§12 / 不変条件12: ファストチェイサーは通常チェイサーと同じ追跡判断を行い、移動速度が速い', () => {
+  const t = setup(mkStage(
+    { 8: FULL },
+    { 8: '.1........P.....' }
+  ));
+  const chaser = t.game.enemies[0];
+  const fast = RK.Enemy.create(t.game.stage, { id: 'fast_chaser', col: 1, row: 8 });
+  t.game.enemies.push(fast);
+  t.game.actors.push(fast);
+  RK.Enemy.triggerAI(fast, 'spawn', t.game);
+
+  eq(chaser.dirX, fast.dirX, '初期判断方向が一致');
+  t.tick(40);
+  eq(fast.x > chaser.x, true, 'ファストチェイサーの方が速く進む fast=' + fast.x + ' chaser=' + chaser.x);
 });
 
 console.log('地形: 足場（床・樽）');
