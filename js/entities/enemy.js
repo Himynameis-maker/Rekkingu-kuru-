@@ -1,4 +1,4 @@
-/* ===== 敵の共通土台（ステップ8b-4改） =====
+/* ===== 敵の共通土台 =====
  * 座標系・地形判定・落下状態はプレイヤーと共通（中心x + 足y、整数ドット）。
  * AI（方向転換・梯子選択）は「グリッドの節目（イベント）」および親方のtickフックで呼び出す:
  *   - 'spawn'        : スポーン直後
@@ -217,6 +217,16 @@
         const prevDirX = e.dirX;
         triggerAI(e, 'screen_wrap', game);
         if (e.mode !== 'ground' || e.dirX !== prevDirX || e.pauseFrames > 0) break;
+      }
+
+      // 親方が同じ高さで記憶した目標Xの許容範囲に入ったら即座にピタッと止まる（左右ブレ防止）
+      if (e.id === 'foreman' && e.foremanTargetY === e.y && e.foremanTargetX !== null) {
+        if (Math.abs(e.foremanTargetX - e.x) <= C.FOREMAN_ARRIVE_TOLERANCE) {
+          e.dirX = 0;
+          e.moveAccum = 0;
+          e.needsReeval = false;
+          break;
+        }
       }
 
       const col = stage.colAt(e.x);
