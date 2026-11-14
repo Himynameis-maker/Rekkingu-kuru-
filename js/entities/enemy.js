@@ -1,8 +1,9 @@
-/* ===== 敵の共通土台（ステップ8b-4） =====
+/* ===== 敵の共通土台（ステップ8b-4改） =====
  * 座標系・地形判定・落下状態はプレイヤーと共通（中心x + 足y、整数ドット）。
  * AI（方向転換・梯子選択）は「グリッドの節目（イベント）」および親方のtickフックで呼び出す:
  *   - 'spawn'        : スポーン直後
  *   - 'cell_center'  : 地上歩行中にセルの中心（x === stage.centerX(col)）へ到達した瞬間（または再判定要求時）
+ *   - 'screen_wrap'  : 地上歩行中に画面端の左右ループを通過した瞬間（親方の目標再取得トリガー用）
  *   - 'blocked'      : 地上歩行中に障害物（樽など）で進めなくなった瞬間
  *   - 'ladder_floor' : 梯子昇降中に床の高さ（y % CELL_H === 0）または梯子端へ到達した瞬間
  *   - 'land'         : 通常落下または梯子消滅で床に着地した瞬間（スタン・速度段階上昇ともにしない）
@@ -48,10 +49,13 @@
       runnerVertical: null,               // Runner用: 縦移動の優先方向（null=未決定 / -1=上 / 1=下）
       horizontalNext: false,              // Runner用: 縦移動直後は横移動を最優先するフラグ
       hammerFrames: 0,                    // 親方のハンマー表示残りtick
-      pauseFrames: 0,                     // 親方の行動切替停止残りtick
-      foremanPhase: 'patrol',             // 親方用: 'patrol' | 'periodic_pause' | 'spot_pause' | 'swing_wait'
-      foremanWalkTimer: 0,                // 親方用: 次の定期立ち止まりまでの移動残りtick（4〜6s）
-      foremanCheckTick: 0,                // 親方用: 荒い接近・高さ合わせチェックカウンタ（0..3）
+      pauseFrames: 0,                     // 親方のハンマー前停止残りtick
+      foremanPhase: 'patrol',             // 親方用: 'patrol' | 'spot_pause' | 'swing_wait'
+      foremanTargetX: null,               // 親方用: 間欠サンプリングで記憶した目標X
+      foremanTargetY: null,               // 親方用: 間欠サンプリングで記憶した目標Y
+      foremanThinkTimer: 0,               // 親方用: 次の目標座標サンプリングまでの残りtick
+      foremanLadderWobble: 0,             // 親方用: ハシゴ上で目標Y近傍を上下にブレている経過tick
+      foremanLockedTarget: null,          // 親方用: ハンマー破壊対象セル { col, row }
     };
   }
 
@@ -93,6 +97,8 @@
     e.pauseFrames = 0;
     if (e.id === 'foreman') {
       e.foremanPhase = 'patrol';
+      e.foremanLockedTarget = null;
+      e.foremanLadderWobble = 0;
     }
   }
 
@@ -104,6 +110,9 @@
     e.x = stage.centerX(col);
     e.dirX = 0;
     e.dirY = dirY;
+    if (e.id === 'foreman') {
+      e.foremanLadderWobble = 0;
+    }
   }
 
   /** AI判断結果 { dirX, dirY } を敵の状態へ反映する */
@@ -201,7 +210,14 @@
         break;
       }
 
+      const wrapped = (nx < 0 || nx >= C.WIDTH);
       e.x = RK.Physics.wrapX(nx);
+
+      if (wrapped && e.id === 'foreman') {
+        const prevDirX = e.dirX;
+        triggerAI(e, 'screen_wrap', game);
+        if (e.mode !== 'ground' || e.dirX !== prevDirX || e.pauseFrames > 0) break;
+      }
 
       const col = stage.colAt(e.x);
       if (e.x === stage.centerX(col)) {
@@ -228,7 +244,7 @@
     }
     if (e.stunFrames > 0 || e.pauseFrames > 0) return;
 
-    // 親方がハシゴ上でプレイヤー高さにピタッと合わせて停止中（dirY === 0）の場合
+    // 親方がハシゴ上で目標高さにピタッと合わせて停止中（dirY === 0）の場合
     if (e.dirY === 0) {
       e.climbAccum = 0;
       return;
@@ -308,7 +324,7 @@
       }
     }
 
-    // 親方専用のtickフック（定期立ち止まり・接近停止・ハンマー振り・ハシゴ生座標高さ合わせ）
+    // 親方専用のtickフック（思考タイマー・ハシゴ高さ合わせ・ハンマー破壊判定）
     if (e.id === 'foreman' && RK.ForemanAI && RK.ForemanAI.onTick) {
       RK.ForemanAI.onTick(e, game);
     }
