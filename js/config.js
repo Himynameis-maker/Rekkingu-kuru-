@@ -69,15 +69,13 @@
     ENEMY_FALL_SPEED: 2,                 // 敵の落下速度（ドット/tick）
     ENEMY_ABNORMAL_LAND_STUN_FRAMES: 60, // 敵の異常落下後のスタンtick数（1.0秒 @ 60Hz。親方はプレイヤーと同じ30tick）
 
-    // --- 親方（Foreman）専用パラメータ（ステップ8b-4） ---
-    FOREMAN_WALK_MIN_FRAMES: 240,        // 立ち止まりまでの最小移動時間（4.0秒 @ 60Hz）
-    FOREMAN_WALK_MAX_FRAMES: 360,        // 立ち止まりまでの最大移動時間（6.0秒 @ 60Hz）
-    FOREMAN_PAUSE_MIN_FRAMES: 36,        // 定期立ち止まりの最小時間（0.6秒 @ 60Hz）
-    FOREMAN_PAUSE_MAX_FRAMES: 72,        // 定期立ち止まりの最大時間（1.2秒 @ 60Hz）
+    // --- 親方（Foreman）専用パラメータ（ステップ8b-4改） ---
+    FOREMAN_THINK_FRAMES: 54,            // 目標座標の間欠サンプリング周期（0.9秒 @ 60Hz）
+    FOREMAN_ARRIVE_TOLERANCE: 3,         // 地上での目標X到達停止の許容幅（ドット）
+    FOREMAN_LADDER_WOBBLE_FRAMES: 18,    // ハシゴ上で中途半端な目標Y付近を上下にブレた後にピタッと止まるまでのtick数（0.3秒）
     FOREMAN_SPOT_MIN_FRAMES: 18,         // プレイヤーグリッド到達時の停止最小時間（0.3秒 @ 60Hz）
     FOREMAN_SPOT_MAX_FRAMES: 48,         // プレイヤーグリッド到達時の停止最大時間（0.8秒 @ 60Hz）
     FOREMAN_SWING_INTERVAL_FRAMES: 60,   // 振り下ろし後から次の振り/トリガー判定までの時間（1.0秒 @ 60Hz）
-    FOREMAN_CHECK_INTERVAL: 2,           // 接近・ハシゴ高さ合わせのチェック周期（tick）
     FOREMAN_ALIGN_X_RANGE: 12,           // 位置合わせ立ち止まりの横判定範囲（ドット）
     FOREMAN_ALIGN_Y_RANGE: 14,           // 位置合わせ立ち止まりの縦判定範囲（ドット）
     FOREMAN_SWING_X_RANGE: 20,           // 振り判断の横判定範囲（ドット。位置合わせより広め）
