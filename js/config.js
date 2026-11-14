@@ -70,15 +70,18 @@
     ENEMY_ABNORMAL_LAND_STUN_FRAMES: 60, // 敵の異常落下後のスタンtick数（1.0秒 @ 60Hz。親方はプレイヤーと同じ30tick）
 
     // --- 親方（Foreman）専用パラメータ（ステップ8b-4改） ---
-    FOREMAN_THINK_FRAMES: 54,            // 目標座標の間欠サンプリング周期（0.9秒 @ 60Hz）
-    FOREMAN_ARRIVE_TOLERANCE: 3,         // 地上での目標X到達停止の許容幅（ドット）
-    FOREMAN_LADDER_WOBBLE_FRAMES: 18,    // ハシゴ上で中途半端な目標Y付近を上下にブレた後にピタッと止まるまでのtick数（0.3秒）
-    FOREMAN_SPOT_MIN_FRAMES: 18,         // プレイヤーグリッド到達時の停止最小時間（0.3秒 @ 60Hz）
-    FOREMAN_SPOT_MAX_FRAMES: 48,         // プレイヤーグリッド到達時の停止最大時間（0.8秒 @ 60Hz）
-    FOREMAN_SWING_INTERVAL_FRAMES: 60,   // 振り下ろし後から次の振り/トリガー判定までの時間（1.0秒 @ 60Hz）
-    FOREMAN_ALIGN_X_RANGE: 12,           // 位置合わせ立ち止まりの横判定範囲（ドット）
-    FOREMAN_ALIGN_Y_RANGE: 14,           // 位置合わせ立ち止まりの縦判定範囲（ドット）
-    FOREMAN_SWING_X_RANGE: 20,           // 振り判断の横判定範囲（ドット。位置合わせより広め）
-    FOREMAN_SWING_Y_RANGE: 18            // 振り判断の縦判定範囲（ドット）
+        // --- 親方（Foreman）専用パラメータ（原作6502思考統合版） ---
+    FOREMAN_CHECK_INTERVAL: 2,           // 追跡・ハシゴ高さ合わせのチェック周期（2tick = 30Hz。原作 $D125 準拠）
+    FOREMAN_ALIGN_X_RANGE: 12,           // 位置合わせ停止の横判定範囲（ドット）
+    FOREMAN_ALIGN_Y_RANGE: 14,           // 位置合わせ停止の縦判定範囲（ドット）
+    FOREMAN_ALIGN_PAUSE_FRAMES: 60,      // 同段・同X列でピタッと止まって様子見する時間（1.0秒 @ 60Hz。原作64tick準拠）
+    FOREMAN_FEINT_EXTEND_FRAMES: 24,     // 様子見中にプレイヤーが向きを変えたときの延長時間（0.4秒 @ 60Hz）
+    FOREMAN_ALIGN_COOLDOWN_FRAMES: 90,   // 様子見から動き出した後、再び同X列停止に入るまでの猶予（1.5秒 @ 60Hz）
+    FOREMAN_TURN_COOLDOWN_FRAMES: 12,    // 平地2tick追跡での連続反転（震え）防止クールダウン（0.2秒 @ 60Hz）
+    FOREMAN_SPOT_FRAMES: 24,             // ハンマー振り下ろし前の構え停止時間（0.4秒 @ 60Hz）
+    FOREMAN_SWING_INTERVAL_FRAMES: 60,   // 振り下ろし後から次の振り判定までの間隔（1.0秒 @ 60Hz）
+    FOREMAN_SWING_X_RANGE: 20,           // 連続振り継続の横判定範囲（ドット）
+    FOREMAN_SWING_Y_RANGE: 18            // 連続振り継続の縦判定範囲（ドット）
+
   });
 })(window);
